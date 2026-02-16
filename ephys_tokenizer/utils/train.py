@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pickle
 from pathlib import Path
+from torch.utils.data import ConcatDataset, DataLoader
 from typing import Dict, Optional
 
 
@@ -48,3 +49,23 @@ def get_history(
             pickle.dump(history, f)
     
     return history
+
+
+def unwrap_dataset(dl: DataLoader) -> ConcatDataset:
+    """
+    Recursively unwraps `.dataset` attributes from the PyTorch dataloader
+    until the base dataset is reached.
+
+    Parameters
+    ----------
+    dl : DataLoader
+        A PyTorch DataLoader to unwrap.
+
+    Returns
+    -------
+    dl : ConcatDataset
+        The base dataset.
+    """
+    while hasattr(dl, "dataset"):
+        dl = dl.dataset
+    return dl
