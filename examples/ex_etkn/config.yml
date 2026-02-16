@@ -1,0 +1,20 @@
+# Meta data
+name: ephys_tokenizer
+
+# Model config
+n_channels: 52
+n_tokens: 128
+rnn_n_units: 128
+sequence_length: 200
+token_dim: 10
+token_kernel_padding: same
+
+# Training config
+batch_size: 32
+n_epochs: 10
+optimizer:
+  learning_rate: 1.0e-05
+temperature_annealing:
+  n_annealing_epochs: 10
+  n_stages: 10
+multi_gpu: True
