@@ -1,0 +1,6 @@
+# Meta data
+name: standard_quantile_tokenizer
+
+# Model config
+n_tokens: 108
+standardize: false
