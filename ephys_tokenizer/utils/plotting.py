@@ -161,8 +161,8 @@ def plot_token_counts(
 
 def plot_fitted_signal(
     original_data_path: str,
-    token_weights: Union[np.ndarray, List[np.ndarray]],
     reconstructed_data: Union[np.ndarray, List[np.ndarray]],
+    token_weights: Optional[Union[np.ndarray, List[np.ndarray]]] = None,
     subject_idx: Optional[int] = 0,
     plot_dir: Optional[str] = None,
 ) -> None:
@@ -173,10 +173,10 @@ def plot_fitted_signal(
     ----------
     original_data_path : str
         Path to the original data file.
-    token_weights : Union[np.ndarray, List[np.ndarray]]
-        Token weights for the reconstructed data.
     reconstructed_data : Union[np.ndarray, List[np.ndarray]]
         Reconstructed data from the tokenized input.
+    token_weights : Union[np.ndarray, List[np.ndarray]], optional
+        Token weights for the reconstructed data.
     subject_idx : int, optional
         Index of the subject to plot.
     plot_dir : str, optional
@@ -195,7 +195,8 @@ def plot_fitted_signal(
 
     # Get reconstructed data and token weights
     reconstructed_data = reconstructed_data[subject_idx]
-    token_weights = token_weights[subject_idx]
+    if token_weights is not None:
+        token_weights = token_weights[subject_idx]
 
     # Match the data lengths
     min_length = reconstructed_data.shape[0]
@@ -211,8 +212,9 @@ def plot_fitted_signal(
         axes[0].plot(x, reconstructed_data[start_idx:end_idx, n], label="Fitted")
         axes[0].set_title(f"Channel {n}: Data Signals")
         axes[0].legend()
-        axes[1].plot(x, token_weights[start_idx:end_idx, n, :])
-        axes[1].set_title(f"Token Weights")
+        if token_weights is not None:
+            axes[1].plot(x, token_weights[start_idx:end_idx, n, :])
+            axes[1].set_title(f"Token Weights")
         plt.tight_layout()
 
         if plot_dir:
