@@ -1,0 +1,427 @@
+"""Implementation of the mu-transform tokenizer model."""
+
+# Import packages
+import logging
+import numpy as np
+import os
+import pickle
+from pqdm.threads import pqdm
+from tqdm.auto import tqdm, trange
+from typing import Union, List, Tuple, Optional
+from ephys_tokenizer.configs import Config, get_config
+
+
+_logger = logging.getLogger(__name__)
+
+
+class MuTransformTokenizer:
+    """
+    MuTransformTokenizer class.
+
+    Note that this class is framework-agnostic and can be used with
+    any deep learning framework.
+
+    Parameters
+    ----------
+    config : Config
+        Configuration object.
+    """
+    def __init__(self, config: Config):
+        self.base_config = config
+        self.config = config.config_class
+        self.vocab = {}
+        self.n_tokens = self.config.n_tokens
+
+    def fit(
+        self,
+        x: Union[np.ndarray, List[np.ndarray]],
+        clip: Optional[Union[int, float]] = None,
+    ) -> None:
+        """
+        Fits the tokenizer to the data.
+
+        Parameters
+        ----------
+        x : Union[np.ndarray, List[np.ndarray]]
+            Input data to fit the tokenizer on.
+        clip : Optional[Union[int, float]]
+            Value to clip the input data to.
+        """
+        if not isinstance(x, list):
+            x = [x]
+
+        if clip is not None:
+            x = [np.clip(x_i, a_min=-clip, a_max=clip) for x_i in x]
+
+        self.vocab["data_range"] = self.get_data_range(x)
+        self.vocab["bins"] = self.get_bins()
+        self.vocab["bins_average"] = self.get_bins_average()
+        self.vocab["total_token_counts"] = self.get_token_counts(x)
+
+    def get_token_counts(
+        self, data: Union[np.ndarray, List[np.ndarray]]
+    ) -> np.ndarray:
+        """
+        Gets the token counts for the given data.
+
+        Parameters
+        ----------
+        data : Union[np.ndarray, List[np.ndarray]]
+            The data to get token counts for.
+
+        Returns
+        -------
+        token_counts : np.ndarray
+            The token counts.
+        """
+        tokens = self.tokenize_data(data, concatenate=True)
+        token_counts = np.bincount(
+            tokens.flatten(), minlength=self.n_tokens
+        )
+        return token_counts
+
+    # ---------------------------------
+    # Normalization & Mu-Transformation
+    # ---------------------------------
+
+    def get_data_range(
+        self, data: Union[np.ndarray, List[np.ndarray]]
+    ) -> Tuple[float, float]:
+        """
+        Gets the data range for the given data.
+
+        Parameters
+        ----------
+        data : Union[np.ndarray, List[np.ndarray]]
+            The data to get the range from.
+
+        Returns
+        -------
+        data_range : Tuple[float, float]
+            The data range (min, max).
+        """
+        if not isinstance(data, list):
+            data = [data]
+
+        min_ = np.inf
+        max_ = -np.inf
+        for x in tqdm(data, desc="Calculating data range", total=len(data)):
+            min_ = min(min_, np.min(x))
+            max_ = max(max_, np.max(x))
+        return min_, max_
+
+    def normalize(self, x: np.ndarray) -> np.ndarray:
+        """
+        Normalizes data to the range of (-1, 1).
+        """
+        if "data_range" not in self.vocab:
+            raise ValueError("Data range is not set. Call fit() first.")
+
+        min_, max_ = self.vocab["data_range"]
+        if self.config.normalization == "max_abs":
+            max_abs = max(abs(min_), abs(max_))
+            x /= max_abs
+        else:
+            x = (x - min_) / (max_ - min_)
+            x = 2 * x - 1
+        return x
+
+    def reverse_normalize(self, x: np.ndarray) -> np.ndarray:
+        """
+        De-normalizes data to the original range.
+        """
+        if "data_range" not in self.vocab:
+            raise ValueError("Data range is not set. Call fit() first.")
+
+        min_, max_ = self.vocab["data_range"]
+        if self.config.normalization == "max_abs":
+            max_abs = max(abs(min_), abs(max_))
+            x *= max_abs
+        else:
+            x = (x + 1) / 2
+            x = x * (max_ - min_) + min_
+        return x
+
+    def mu_transform(self, x: np.ndarray) -> np.ndarray:
+        """
+        Applies the mu transformation to the input data.
+        """
+        mu = self.config.mu
+        return np.sign(x) * np.log1p(np.abs(x) * mu) / np.log1p(mu)
+
+    def reverse_mu_transform(self, x: np.ndarray) -> np.ndarray:
+        """
+        Applies the inverse mu transformation to the input data.
+        """
+        mu = self.config.mu
+        return np.sign(x) * (np.expm1(np.abs(x) * np.log1p(mu)) / mu)
+
+    # -------
+    # Binning
+    # -------
+
+    def _get_bins(self) -> np.ndarray:
+        """
+        Gets the bins for the tokenizer.
+        """
+        # Set the bins
+        bins = np.linspace(-1, 1, self.n_tokens - 1)
+        # NOTE: The bins are equally spaced in the range of (-1, 1).
+        #       The tokens 0 and n_tokens - 1 are for values <= -1 and >= 1,
+        #       and the rest n_tokens - 2 are for values in between.
+
+        # Add epsilon to avoid non-inclusive bin edges
+        bins[0] += 1e-10
+        bins[-1] -= 1e-10
+        # NOTE: Ensures the first and last bins are not empty.
+
+        return bins
+
+    def get_bins(self) -> np.ndarray:
+        """
+        Gets the bins for the tokenizer in the original data space.
+        """
+        bins = self._get_bins()
+        bins = self.reverse_mu_transform(bins)
+        bins = self.reverse_normalize(bins)
+        return bins
+
+    def _get_bins_average(self) -> np.ndarray:
+        """
+        Averages the bin edges to get the bin centers.
+        """
+        # Calculate the average of each bin
+        bins = self._get_bins()
+        bins_average = np.zeros(len(bins) + 1)
+        bins_average[0] = -1
+        bins_average[-1] = 1
+
+        for i in range(len(bins) - 1):
+            bins_average[i + 1] = (bins[i] + bins[i + 1]) / 2
+        return bins_average
+
+    def get_bins_average(self) -> np.ndarray:
+        """
+        Gets the bin centers for the tokenizer.
+        """
+        bins_average = self._get_bins_average()
+        bins_average = self.reverse_mu_transform(bins_average)
+        bins_average = self.reverse_normalize(bins_average)
+        return bins_average
+
+    # -----------------------------
+    # Tokenization & Reconstruction
+    # -----------------------------
+
+    def tokenize_data(
+        self,
+        data: Union[np.ndarray, List[np.ndarray]],
+        concatenate: Optional[bool] = False,
+        n_jobs: Optional[int] = 1,
+    ) -> Union[np.ndarray, List[np.ndarray]]:
+        """
+        Tokenizes the input data into discrete bins.
+
+        Parameters
+        ----------
+        data : Union[np.ndarray, List[np.ndarray]]
+            The input data to tokenize.
+        concatenate : bool, optional
+            Whether to concatenate the tokenized data into a single array.
+        n_jobs : int, optional
+            The number of jobs to run in parallel.
+
+        Returns
+        -------
+        tokens : Union[np.ndarray, List[np.ndarray]]
+            The tokenized data.
+        """
+        if not isinstance(data, list):
+            data = [data]
+
+        def _tokenize_data_per_session(d):
+            return np.digitize(d, self.vocab["bins"])
+
+        # Run tokenization
+        kwargs = [{"d": d} for d in data]
+        if len(data) == 1:
+            _logger.info("Tokenizing data...")
+            tokens = [_tokenize_data_per_session(**kwargs[0])]
+
+        elif n_jobs == 1:
+            tokens = []
+            for i in trange(len(data), desc="Tokenizing data"):
+                tokens.append(_tokenize_data_per_session(**kwargs[i]))
+
+        else:
+            tokens = pqdm(
+                kwargs,
+                _tokenize_data_per_session,
+                n_jobs=n_jobs,
+                desc="Tokenizing data",
+                argument_type="kwargs",
+                exception_behaviour="immediate",
+            )
+
+        if concatenate or len(tokens) == 1:
+            tokens = np.concatenate(tokens)
+        return tokens
+
+    def reconstruct_data(
+        self,
+        tokens: Union[np.ndarray, List[np.ndarray]],
+        concatenate: Optional[bool] = False,
+        n_jobs: Optional[int] = 1,
+    ) -> Union[np.ndarray, List[np.ndarray]]:
+        """
+        Reconstructs the original data from the quantized representation.
+
+        Parameters
+        ----------
+        tokens : Union[np.ndarray, List[np.ndarray]]
+            The tokenized data to reconstruct.
+        concatenate : bool, optional
+            Whether to concatenate the reconstructed data into a single array.
+        n_jobs : int, optional
+            The number of jobs to run in parallel.
+
+        Returns
+        -------
+        reconstructed_data : Union[np.ndarray, List[np.ndarray]]
+            The reconstructed data.
+        """
+        if not isinstance(tokens, list):
+            tokens = [tokens]
+
+        def _reconstruct_data_per_session(t):
+            x = self.vocab["bins_average"][t]
+            return x
+
+        # Run data reconstruction
+        kwargs = [{"t": t} for t in tokens]
+        if len(tokens) == 1:
+            _logger.info("Reconstructing data...")
+            reconstructed_data = [_reconstruct_data_per_session(**kwargs[0])]
+
+        elif n_jobs == 1:
+            reconstructed_data = []
+            for i in trange(len(tokens), desc="Reconstructing data"):
+                reconstructed_data.append(_reconstruct_data_per_session(**kwargs[i]))
+
+        else:
+            reconstructed_data = pqdm(
+                kwargs,
+                _reconstruct_data_per_session,
+                n_jobs=n_jobs,
+                desc="Reconstructing data",
+                argument_type="kwargs",
+                exception_behaviour="immediate",
+            )
+
+        if concatenate or len(reconstructed_data) == 1:
+            reconstructed_data = np.concatenate(reconstructed_data)
+        return reconstructed_data
+
+    # -----------------
+    # Post hoc analysis
+    # -----------------
+
+    def get_pve(
+        self,
+        data: Union[np.ndarray, List[np.ndarray]],
+        n_jobs: Optional[int] = 1,
+    ) -> np.ndarray:
+        """
+        Computes the percentage of variance explained by the tokens.
+
+        Parameters
+        ----------
+        data : Union[np.ndarray, List[np.ndarray]]
+            Input time series data.
+            Each element should be of shape (n_samples, n_channels).
+        n_jobs : int, optional
+            Number of jobs to run in parallel, by default 1.
+
+        Returns
+        -------
+        pve : np.ndarray
+            The percentage of variance explained by the tokens for each subject/session.
+        """
+        if not isinstance(data, list):
+            data = [data]
+
+        tokens = self.tokenize_data(data, n_jobs=n_jobs)
+        reconstructed_data = self.reconstruct_data(tokens, n_jobs=n_jobs)
+
+        if not isinstance(reconstructed_data, list):
+            reconstructed_data = [reconstructed_data]
+
+        pve = []
+        for i in range(len(data)):
+            original_x = data[i]
+            reconstructed_x = reconstructed_data[i]
+            pve.append(
+                100 * (1 - np.sum((original_x - reconstructed_x) ** 2) / np.sum(original_x ** 2))
+            )
+
+        if len(pve) == 1:
+            return pve[0]
+        return np.array(pve)
+
+    # ----------------
+    # Saving & Loading
+    # ----------------
+
+    def save(self, dirname: str) -> None:
+        """
+        Saves the token vocabulary.
+
+        Parameters
+        ----------
+        dirname : str
+            Directory to save the model.
+        """
+        os.makedirs(dirname, exist_ok=True)
+
+        # Save token vocabulary
+        with open(f"{dirname}/vocab.pkl", "wb") as f:
+            pickle.dump(self.vocab, f)
+        _logger.info(f"Saved token vocabulary in {dirname}.")
+
+    @staticmethod
+    def load_config(dirname: str) -> Config:
+        """
+        Loads the config from a directory.
+
+        Parameters
+        ----------
+        dirname : str
+            Directory to load the configuration from.
+
+        Returns
+        -------
+        config : Config
+            Configuration object.
+        """
+        return get_config(f"{dirname}/config.yml")
+
+    @classmethod
+    def load_model(cls, dirname: str):
+        """
+        Loads a saved model.
+
+        Parameters
+        ----------
+        dirname : str
+            Directory containing the saved model.
+
+        Returns
+        -------
+        model : MuTransformTokenizer
+            The loaded model.
+        """
+        config = cls.load_config(dirname)
+        model = cls(config)
+        with open(f"{dirname}/vocab.pkl", "rb") as f:
+            model.vocab = pickle.load(f)
+        return model
