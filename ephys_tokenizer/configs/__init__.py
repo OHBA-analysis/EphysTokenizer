@@ -1,7 +1,6 @@
 """Wrapper class for tokenizer configurations."""
 
 # Import packages
-import yaml
 from dataclasses import dataclass
 from typing import Union
 from ephys_tokenizer.configs.config import (
@@ -35,13 +34,6 @@ class Config:
 
     def set_config(self, config: dict) -> None:
         self.config_class.set_config(config)
-
-    def get_config(self) -> dict:
-        return self.config_class.to_dict()
-
-    def save_config(self, dirname: str) -> None:
-        with open(f"{dirname}/config.yml", "w") as f:
-            yaml.dump(self.config_class.to_dict(), f)
 
 
 def get_config(config: Union[str, dict]) -> Config:
