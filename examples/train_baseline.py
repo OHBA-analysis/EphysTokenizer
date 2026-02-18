@@ -4,10 +4,8 @@
 import argparse
 import logging
 import mne
-import numpy as np
 from glob import glob
 from pathlib import Path
-from typing import Optional
 
 from ephys_tokenizer.configs import get_config
 from ephys_tokenizer.models import MuTransformTokenizer, StandardQuantileTokenizer
@@ -24,39 +22,24 @@ models = {
 }
 
 
-def main(
-    config_path: str,
-    run_dir: str,
-    load: Optional[str] = False,
-):
+def main(config_path: str, run_dir: str, load: str):
+    # ---------- Set Up ----------
+
     # Load config
     config = get_config(config_path)
     cfg = config.config_class
     model = models[cfg.name]
 
-    # Get directories
+    # Create directories
     Path(run_dir).mkdir(parents=True, exist_ok=True)
     (Path(run_dir) / "figures").mkdir(exist_ok=True)
 
-    data_dir = "/well/win-camcan/shared/spring23/src"
-
-    # Select subset of the data
-    train_idx = np.array([
-        38, 57, 421, 534, 413, 146, 245, 152, 410, 139, 79, 583, 489,
-        67, 218, 260, 342, 118, 372, 51, 592, 289, 598, 504, 538, 171,
-       320, 137, 41, 157, 341, 596, 375, 502, 32, 590, 560, 37, 155,
-       495, 142, 183, 332, 339, 353, 518, 194, 475, 93, 64,
-    ])  # selected using the numpy random generator with seed=813
-    print(f"Number of training subjects: {len(train_idx)}")
-
-    data_files = sorted(glob(f"{data_dir}/*/sflip_parc-raw.fif"))
-    data_files = [data_files[i] for i in train_idx]
-    subject_ids = sorted([Path(f).parent.name for f in data_files])
-    # NOTE: It is important to sort the subject IDs, as they get sorted automatically
-    #       inside the CamcanGlasser dataset.
-    #       If not, this creates mismatch between subjects in `plot_fitted_signal()`.
-
     # ---------- Dataset ----------
+
+    # Get data files
+    data_dir = "/well/win-camcan/shared/spring23/src"
+    data_files = sorted(glob(f"{data_dir}/*/sflip_parc-raw.fif"))[:50]  # use subset for example
+    subject_ids = [Path(f).parent.name for f in data_files]
 
     # Prepare dataset and data module
     camcan_data = []
@@ -66,23 +49,23 @@ def main(
         data = (data - data.mean(axis=0)) / data.std(axis=0)
         camcan_data.append(data)
 
-    # ---------- Model Training ----------
+    # ---------- Model Fitting ----------
 
     if not load:
-        # Build and fit tokenizer
+        # Build and run tokenizer
         tokenizer = model(config)
         tokenizer.fit(camcan_data, clip=4)  # clip to 4 standard deviations
         tokenizer.save(run_dir)
-        _logger.info(f"Training finished. Model saved to: {run_dir}")
+        _logger.info(f"Fitting finished. Model saved to: {run_dir}")
     else:
         # Load model
         tokenizer = model.load_model(run_dir)
 
     # ---------- Visualization ----------
 
-    # Compute PVE
+    # Plot subject-level PVEs
     pve = tokenizer.get_pve(camcan_data, n_jobs=8)
-    print(f"Percentage of Variance Explained (PVE): {pve}")
+    print(f"Percentage of Variance Explained (PVE) - Average: {pve.mean()}")
     plotting.plot_pve(pve, plot_dir=f"{run_dir}/figures")
 
     # Plot signals reconstructed from tokenized data (for one session)
@@ -103,7 +86,7 @@ def main(
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Train Non-Learnable Baselines")
+    p = argparse.ArgumentParser(description="Train Non-Learnable Baseline Tokenizer")
     p.add_argument("--config", type=str, required=True, help="Path to config.yml.")
     p.add_argument("--run_dir", type=str, required=True, help="Directory to save the trained model.")
     p.add_argument("--load", action="store_true", help="Whether to load a trained model.")

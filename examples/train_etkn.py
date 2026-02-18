@@ -3,13 +3,11 @@
 # Import packages
 import argparse
 import logging
-import numpy as np
 from glob import glob
 from pathlib import Path
-from typing import Optional
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger
+from pytorch_lightning.loggers import CSVLogger
 
 from ephys_tokenizer.configs import get_config
 from ephys_tokenizer.data.dataloader import CamcanGlasserDataModule
@@ -27,15 +25,14 @@ logging.basicConfig(level=logging.INFO)
 def main(
     config_path: str,
     run_dir: str,
-    gpus: Optional[int] = None,
-    precision: Optional[int] = 32,
-    deterministic: Optional[bool] = True,
-    logger_type: Optional[str] = "csv",
-    seed: Optional[int] = 0,
-    checkpoint: Optional[str] = None,
+    gpus: int = None,
+    precision: int = 32,
+    deterministic: bool  = True,
+    seed: int = 0,
+    checkpoint: str = None,
 ):
-    # ---------- Setting Up ----------
-    
+    # ---------- Set Up ----------
+
     # Load config
     config = get_config(config_path)
     cfg = config.config_class
@@ -45,29 +42,15 @@ def main(
     (Path(run_dir) / "checkpoints").mkdir(exist_ok=True)
     (Path(run_dir) / "figures").mkdir(exist_ok=True)
 
-    log_dir = Path(run_dir) / "csv_logs/version_0"
-    data_dir = "/well/win-camcan/shared/spring23/src"
-
     # Set seed (for reproducibility)
     pl.seed_everything(seed, workers=True)
 
-    # Select subset of the data
-    train_idx = np.array([
-        38, 57, 421, 534, 413, 146, 245, 152, 410, 139, 79, 583, 489,
-        67, 218, 260, 342, 118, 372, 51, 592, 289, 598, 504, 538, 171,
-       320, 137, 41, 157, 341, 596, 375, 502, 32, 590, 560, 37, 155,
-       495, 142, 183, 332, 339, 353, 518, 194, 475, 93, 64,
-    ])  # selected using the numpy random generator with seed=813
-    print(f"Number of training subjects: {len(train_idx)}")
-
-    data_files = sorted(glob(f"{data_dir}/*/sflip_parc-raw.fif"))
-    data_files = [data_files[i] for i in train_idx]
-    subject_ids = sorted([Path(f).parent.name for f in data_files])
-    # NOTE: It is important to sort the subject IDs, as they get sorted automatically
-    #       inside the CamcanGlasser dataset.
-    #       If not, this creates mismatch between subjects in `plot_fitted_signal()`.
-
     # ---------- Dataset ----------
+
+    # Get data files
+    data_dir = "/well/win-camcan/shared/spring23/src"
+    data_files = sorted(glob(f"{data_dir}/*/sflip_parc-raw.fif"))[:50]  # use subset for example
+    subject_ids = [Path(f).parent.name for f in data_files]
 
     # Prepare dataset and data module
     camcan_data = CamcanGlasser(
@@ -98,13 +81,11 @@ def main(
     if checkpoint is None:
         # Build network via Lightning module
         pl_module = EphysTokenizerModule(config)
-        
+
         # Set logger
-        if logger_type == "csv":
-            logger = CSVLogger(save_dir=run_dir, name="csv_logs")
-        if logger_type == "tensorboard":
-            logger = TensorBoardLogger(save_dir=run_dir, name="tb_logs")
-        
+        logger = CSVLogger(save_dir=run_dir, name="csv_logs")
+        log_dir = Path(run_dir) / "csv_logs/version_0"
+
         # Set callbacks
         checkpoint_callback = callbacks.CheckpointCallback(
             save_freq=1, checkpoint_dir=f"{run_dir}/checkpoints"
@@ -132,14 +113,10 @@ def main(
 
         # Run training via the module wrapper (refactors vocab after training)
         pl_module.fit(trainer=trainer, datamodule=camcan_datamodule)
-
-        # Save final model weights and token vocabulary
-        pl_module.save(run_dir)
+        pl_module.save(run_dir)  # save model weights and token vocab
+        get_history(log_dir, save_dir=run_dir)  # save training history
         _logger.info(f"Training finished. Model saved to: {run_dir}")
 
-        # Save training history
-        get_history(log_dir, save_dir=run_dir)
-    
     else:
         # Load model
         pl_module = EphysTokenizerModule.load_model(run_dir, checkpoint=checkpoint)
@@ -148,12 +125,12 @@ def main(
         camcan_datamodule.setup(stage="test")
 
     # ---------- Visualization ----------
-    # NOTE: Using `full_dataloader()` indicates we are using the full training subset defined
+    # NOTE: Using `full_dataloader()` indicates we are using the full data subset defined
     #       above, not the entire Cam-CAN dataset.
 
     # Compute PVE
     pve = pl_module.get_pve(dataloader=camcan_datamodule.full_dataloader())
-    print(f"Percentage of Variance Explained (PVE): {pve}")
+    print(f"Percentage of Variance Explained (PVE) - Average: {pve.mean()}")
     plotting.plot_pve(pve, plot_dir=f"{run_dir}/figures")
 
     # Plot token kernel response
@@ -164,22 +141,23 @@ def main(
     plotting.plot_token_response(token_response, input, plot_dir=f"{run_dir}/figures")
 
     # Plot token counts histogram
-    plotting.plot_token_counts(vocab=f"{run_dir}/vocab.pkl", plot_dir=f"{run_dir}/figures")
+    plotting.plot_token_counts(
+        vocab=f"{run_dir}/vocab.pkl", plot_dir=f"{run_dir}/figures"
+    )
 
     # Plot signals reconstructed from tokenized data (for one session)
     tokens, token_weights = pl_module.tokenize_data(
         camcan_datamodule.full_dataloader(),
         batch_size=32,
         remap=False,
-        concatenate=False,
         return_weights=True,
         num_workers=8,
     )
     reconstructed_data = pl_module._reconstruct_data(tokens)
     plotting.plot_fitted_signal(
         original_data_path=f"{data_dir}/{subject_ids[0]}/sflip_parc-raw.fif",
-        token_weights=token_weights,
         reconstructed_data=reconstructed_data,
+        token_weights=token_weights,
         subject_idx=0,
         plot_dir=f"{run_dir}/figures",
     )
