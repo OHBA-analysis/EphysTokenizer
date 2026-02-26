@@ -21,3 +21,5 @@ dependencies:
   - pip:
       - mne
       - pqdm
+      - hydra-core
+      - einops
