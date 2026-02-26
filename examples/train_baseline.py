@@ -1,10 +1,11 @@
 """Example script for training baseline non-learnable tokenizers."""
 
 # Import packages
-import argparse
+import hydra
 import logging
 import mne
 from glob import glob
+from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 
 from ephys_tokenizer.configs import get_config
@@ -16,19 +17,26 @@ _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-models = {
+MODELS = {
     "mu_transform_tokenizer": MuTransformTokenizer,
     "standard_quantile_tokenizer": StandardQuantileTokenizer
 }
 
 
-def main(config_path: str, run_dir: str, load: str):
+@hydra.main(version_base=None, config_path=None, config_name=None)
+def main(cfg: DictConfig):
     # ---------- Set Up ----------
+    _logger.info("\n===== Configuration =====:\n" + OmegaConf.to_yaml(cfg))
 
-    # Load config
-    config = get_config(config_path)
-    cfg = config.config_class
-    model = models[cfg.name]
+    # Set main config
+    run_dir = cfg.main.run_dir
+    load = cfg.main.load
+
+    # Load tokenizer model config
+    model_config = OmegaConf.to_container(cfg.model_config, resolve=True)
+    model_config = get_config(model_config)  # Config object
+    model_cfg = model_config.config_class  # tokenizer-specific Config object
+    model = MODELS[model_cfg.name]
 
     # Create directories
     Path(run_dir).mkdir(parents=True, exist_ok=True)
@@ -53,7 +61,7 @@ def main(config_path: str, run_dir: str, load: str):
 
     if not load:
         # Build and run tokenizer
-        tokenizer = model(config)
+        tokenizer = model(model_config)
         tokenizer.fit(camcan_data, clip=4)  # clip to 4 standard deviations
         tokenizer.save(run_dir)
         _logger.info(f"Fitting finished. Model saved to: {run_dir}")
@@ -86,14 +94,4 @@ def main(config_path: str, run_dir: str, load: str):
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Train Non-Learnable Baseline Tokenizer")
-    p.add_argument("--config", type=str, required=True, help="Path to config.yml.")
-    p.add_argument("--run_dir", type=str, required=True, help="Directory to save the trained model.")
-    p.add_argument("--load", action="store_true", help="Whether to load a trained model.")
-    args = p.parse_args()
-
-    main(
-        config_path=args.config,
-        run_dir=args.run_dir,
-        load=args.load,
-    )
+    main()

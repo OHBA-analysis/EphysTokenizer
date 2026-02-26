@@ -62,18 +62,15 @@ The fastest way to get started is to review the example scripts in the `examples
 You can train `EphysTokenizer` on 50 subjects from the resting-state, source-space Cam-CAN dataset by running:
 
 ```bash
-python train_etkn.py \
-    --config ex_etkn/config.yml \
-    --run_dir ex_etkn/ \
-    --gpus {0, 1, 2} \
+python train_etkn.py
 ```
 
 To employ the baseline models (`MuTransformTokenizer` or `StandardQuantileTokenizer`), use:
 
 ```bash
 python train_baseline.py \
-    --config {ex_mu, ex_sq}/config.yml \
-    --run_dir {ex_mu, ex_sq}
+    --config-path {ex_mu, ex_sq} \
+    --config-name config
 ```
 
 These scripts demonstrate how to configure, train, and evaluate the models. Each run generates a `figures` subdirectory containing basic post hoc analysis outputs.
@@ -109,13 +106,13 @@ EphysTokenizer-main/
 │
 └── examples/
     ├── ex_etkn/
-    │   └── config.yml            # YAML config for EphysTokenizer experiment
+    │   └── config.yaml           # YAML config for EphysTokenizer experiment
     │
     ├── ex_mu/
-    │   └── config.yml            # YAML config for μ-transform experiment
+    │   └── config.yaml           # YAML config for μ-transform experiment
     │
     ├── ex_sq/
-    │   └── config.yml            # YAML config for standard quantile experiment
+    │   └── config.yaml           # YAML config for standard quantile experiment
     │
     ├── train_baseline.py         # Example script for baseline tokenizers
     └── train_etkn.py             # Example training script for EphysTokenizer

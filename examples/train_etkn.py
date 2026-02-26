@@ -1,9 +1,10 @@
 """Example script for training EphysTokenizer."""
 
 # Import packages
-import argparse
+import hydra
 import logging
 from glob import glob
+from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 
 import pytorch_lightning as pl
@@ -22,20 +23,23 @@ _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-def main(
-    config_path: str,
-    run_dir: str,
-    gpus: int = None,
-    precision: int = 32,
-    deterministic: bool  = True,
-    seed: int = 0,
-    checkpoint: str = None,
-):
+@hydra.main(version_base=None, config_path="ex_etkn", config_name="config")
+def main(cfg: DictConfig):
     # ---------- Set Up ----------
+    _logger.info("\n===== Configuration =====:\n" + OmegaConf.to_yaml(cfg))
 
-    # Load config
-    config = get_config(config_path)
-    cfg = config.config_class
+    # Set main config
+    run_dir = cfg.main.run_dir
+    gpus = cfg.main.gpus
+    precision = cfg.main.precision
+    deterministic = cfg.main.deterministic
+    seed = cfg.main.seed
+    checkpoint = cfg.main.checkpoint
+
+    # Load tokenizer model config
+    model_config = OmegaConf.to_container(cfg.model_config, resolve=True)
+    model_config = get_config(model_config)  # Config object
+    model_cfg = model_config.config_class  # tokenizer-specific Config object
 
     # Get directories
     Path(run_dir).mkdir(parents=True, exist_ok=True)
@@ -65,10 +69,10 @@ def main(
     )
     camcan_datamodule = CamcanGlasserDataModule(
         dataset=camcan_data,
-        batch_size=cfg.batch_size,
+        batch_size=model_cfg.batch_size,
         val_split=0,
         split_method="subject_window",
-        is_distributed=cfg.multi_gpu,
+        is_distributed=model_cfg.multi_gpu,
         seed=seed,
         num_workers=8,
         pin_memory=True,
@@ -80,7 +84,7 @@ def main(
 
     if checkpoint is None:
         # Build network via Lightning module
-        pl_module = EphysTokenizerModule(config)
+        pl_module = EphysTokenizerModule(model_config)
 
         # Set logger
         logger = CSVLogger(save_dir=run_dir, name="csv_logs")
@@ -91,15 +95,15 @@ def main(
             save_freq=1, checkpoint_dir=f"{run_dir}/checkpoints"
         )
         temperature_callback = callbacks.TemperatureAnnealingCallback(
-            n_stages=cfg.temperature_annealing["n_stages"],
-            n_epochs=cfg.temperature_annealing["n_annealing_epochs"],
-            multi_gpu=cfg.multi_gpu,
+            n_stages=model_cfg.temperature_annealing["n_stages"],
+            n_epochs=model_cfg.temperature_annealing["n_annealing_epochs"],
+            multi_gpu=model_cfg.multi_gpu,
         )
         cbs = [checkpoint_callback, temperature_callback]
 
         # Set trainer
         trainer_kwargs = dict(
-            max_epochs=int(cfg.n_epochs),
+            max_epochs=int(model_cfg.n_epochs),
             logger=logger,
             callbacks=cbs,
             deterministic=deterministic,
@@ -166,22 +170,4 @@ def main(
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Train EphysTokenizer (PyTorch Lightning)")
-    p.add_argument("--config", type=str, required=True, help="Path to config.yml.")
-    p.add_argument("--run_dir", type=str, required=True, help="Directory to save checkpoints and logs.")
-    p.add_argument("--gpus", type=int, default=0, help="Number of GPUs to use (0 = CPU).")
-    p.add_argument("--precision", type=int, default=32, choices=[16, 32], help="Precision level (16 or 32).")
-    p.add_argument("--deterministic", action="store_true", help="Enable deterministic training.")
-    p.add_argument("--seed", type=int, default=0, help="Random seed.")
-    p.add_argument("--checkpoint", type=str, default=None, help="Path to a pre-trained model checkpoint.")
-    args = p.parse_args()
-
-    main(
-        config_path=args.config,
-        run_dir=args.run_dir,
-        gpus=args.gpus,
-        precision=args.precision,
-        deterministic=args.deterministic,
-        seed=args.seed,
-        checkpoint=args.checkpoint,
-    )
+    main()
