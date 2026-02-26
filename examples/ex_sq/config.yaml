@@ -1,0 +1,14 @@
+# Main Script Settings
+main:
+  run_dir: ./ex_sq  # directory to save the trained model
+  load: False       # whether to load a trained model
+
+# Tokenizer Settings
+model_config:
+
+  # Meta data
+  name: standard_quantile_tokenizer
+
+  # Model config
+  n_tokens: 108
+  standardize: false

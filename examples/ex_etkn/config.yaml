@@ -1,0 +1,32 @@
+# Main Script Settings
+main:
+  run_dir: ./ex_etkn   # directory to save checkpoints and logs
+  gpus: 2              # number of GPUs to use (0 = CPU)
+  precision: 32        # precision level (16 or 32)
+  deterministic: True  # enable deterministic training
+  seed: 0              # random seed
+  checkpoint: null     # path to a pre-trained model checkpoint
+
+# Tokenizer Settings
+model_config:
+
+  # Meta data
+  name: ephys_tokenizer
+
+  # Model config
+  n_channels: 52
+  n_tokens: 128
+  rnn_n_units: 128
+  sequence_length: 200
+  token_dim: 10
+  token_kernel_padding: same
+
+  # Training config
+  batch_size: 32
+  n_epochs: 10
+  optimizer:
+    learning_rate: 1.0e-05
+  temperature_annealing:
+    n_annealing_epochs: 10
+    n_stages: 10
+  multi_gpu: True
