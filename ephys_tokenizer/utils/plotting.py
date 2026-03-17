@@ -6,6 +6,7 @@ import mne
 import numpy as np
 import os
 import pickle
+from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 
@@ -183,12 +184,22 @@ def plot_fitted_signal(
         Directory to save the plot.
     """
     # Read original data
-    raw = mne.io.read_raw_fif(original_data_path, preload=True, verbose=False)
-    data = raw.get_data(
-        picks="misc",
-        reject_by_annotation="omit",
-        verbose=False,
-    ).T
+    file_extn = Path(original_data_path).suffix  # file extension
+    if file_extn == ".fif":
+        raw = mne.io.read_raw_fif(original_data_path, preload=True, verbose=False)
+        data = raw.get_data(
+            picks="misc",
+            reject_by_annotation="omit",
+            verbose=False,
+        )
+    elif file_extn == ".npy":
+        data = np.load(original_data_path)
+
+    # Get correct data shape
+    if data.shape[0] < data.shape[1]:  # assumes n_samples > n_channels
+        data = data.T
+    
+    # Standardize original data
     mean = np.mean(data, axis=0, keepdims=True)
     std = np.std(data, axis=0, keepdims=True)
     original_data = (data - mean) / std
