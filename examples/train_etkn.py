@@ -37,9 +37,13 @@ def main(cfg: DictConfig):
     checkpoint = cfg.main.checkpoint
 
     # Load tokenizer model config
-    model_config = OmegaConf.to_container(cfg.model_config, resolve=True)
-    model_config = get_config(model_config)  # Config object
+    model_config = get_config(cfg.model_config)  # Config object
     model_cfg = model_config.config_class  # tokenizer-specific Config object
+
+    # Set model training config
+    batch_size = model_cfg.training.batch_size
+    n_epochs = model_cfg.training.n_epochs
+    multi_gpu = model_cfg.training.multi_gpu
 
     # Get directories
     Path(run_dir).mkdir(parents=True, exist_ok=True)
@@ -69,10 +73,10 @@ def main(cfg: DictConfig):
     )
     camcan_datamodule = CamcanGlasserDataModule(
         dataset=camcan_data,
-        batch_size=model_cfg.batch_size,
+        batch_size=batch_size,
         val_split=0,
         split_method="subject_window",
-        is_distributed=model_cfg.multi_gpu,
+        is_distributed=multi_gpu,
         seed=seed,
         num_workers=8,
         pin_memory=True,
@@ -95,15 +99,15 @@ def main(cfg: DictConfig):
             save_freq=1, checkpoint_dir=f"{run_dir}/checkpoints"
         )
         temperature_callback = callbacks.TemperatureAnnealingCallback(
-            n_stages=model_cfg.temperature_annealing["n_stages"],
-            n_epochs=model_cfg.temperature_annealing["n_annealing_epochs"],
-            multi_gpu=model_cfg.multi_gpu,
+            n_stages=model_cfg.callback.temperature_annealing["n_stages"],
+            n_epochs=model_cfg.callback.temperature_annealing["n_annealing_epochs"],
+            multi_gpu=multi_gpu,
         )
         cbs = [checkpoint_callback, temperature_callback]
 
         # Set trainer
         trainer_kwargs = dict(
-            max_epochs=int(model_cfg.n_epochs),
+            max_epochs=int(n_epochs),
             logger=logger,
             callbacks=cbs,
             deterministic=deterministic,

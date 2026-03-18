@@ -22,11 +22,15 @@ model_config:
   token_kernel_padding: same
 
   # Training config
-  batch_size: 32
-  n_epochs: 10
-  optimizer:
-    learning_rate: 1.0e-05
-  temperature_annealing:
-    n_annealing_epochs: 10
-    n_stages: 10
-  multi_gpu: True
+  training:
+    batch_size: 32
+    n_epochs: 10
+    optimizer:
+      learning_rate: 1.0e-05
+    multi_gpu: True
+
+  # Callback config
+  callback:
+    temperature_annealing:
+      n_annealing_epochs: 10
+      n_stages: 10
