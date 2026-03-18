@@ -20,6 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import ConcatDataset, DataLoader, TensorDataset
 from tqdm.auto import tqdm
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
@@ -49,10 +50,10 @@ def _resolve_optimizer(
         The parameters to optimize.
     optimizer_descriptor : Any
         The optimizer descriptor. This can be:
-            - a callable: optimizer_factory(params) -> optimizer instance
+            - a callable: optimizer_descriptor(params) -> optimizer instance
             - a torch optimizer instance -> returned directly
             - a tuple/list: (torch.optim.OptimizerClass, {"lr":..., ...})
-            - a TF optimizer object or dict from get_config() -> attempt to map to torch optimizer
+            - a dict/DictConfig -> attempt to map to torch optimizer
     """
     if callable(optimizer_descriptor):
         return optimizer_descriptor(params)
@@ -65,7 +66,7 @@ def _resolve_optimizer(
         optim_kwargs = optimizer_descriptor[1] if len(optimizer_descriptor) > 1 else {}
         return optim_cls(params, **optim_kwargs)
 
-    if isinstance(optimizer_descriptor, dict):
+    if isinstance(optimizer_descriptor, (dict, DictConfig)):
         name = optimizer_descriptor.get("name", "adam").lower()
         lr = optimizer_descriptor.get("learning_rate", 1e-3)
         eps = optimizer_descriptor.get("eps", 1e-7)
@@ -178,8 +179,8 @@ class EphysTokenizerModule(pl.LightningModule):
         self.log(
             "train/loss", loss,
             on_step=False, on_epoch=True, prog_bar=True,
-            batch_size=self.config.batch_size,
-            sync_dist=self.config.multi_gpu,
+            batch_size=self.config.training.batch_size,
+            sync_dist=self.config.training.multi_gpu,
         )
         # NOTE: on_epoch logs the mean across all steps (batches) in the epoch.
         return loss
@@ -192,8 +193,8 @@ class EphysTokenizerModule(pl.LightningModule):
         self.log(
             "val/loss", loss,
             on_step=False, on_epoch=True, prog_bar=True,
-            batch_size=self.config.batch_size,
-            sync_dist=self.config.multi_gpu,
+            batch_size=self.config.training.batch_size,
+            sync_dist=self.config.training.multi_gpu,
         )
         # NOTE: on_epoch logs the mean across all steps (batches) in the epoch.
         return loss
@@ -203,11 +204,11 @@ class EphysTokenizerModule(pl.LightningModule):
         Configures optimizers for training.
         """
         # Validation
-        if self.config is None or not hasattr(self.config, "optimizer") or not self.config.optimizer:
+        if self.config is None or not hasattr(self.config, "training") or not self.config.training.optimizer:
             raise ValueError("Optimizer is not defined in the training configuration.")
 
         # Get optimizer
-        optim_description = self.config.optimizer
+        optim_description = self.config.training.optimizer
         optimizer = _resolve_optimizer(self.parameters(), optim_description)
         return optimizer
 
@@ -277,7 +278,7 @@ class EphysTokenizerModule(pl.LightningModule):
         _logger.info(f"Device for tokenization: {device}")
 
         # Set batch size
-        batch_size = batch_size or self.config.batch_size
+        batch_size = batch_size or self.config.training.batch_size
 
         # Unify torch dataset type
         dataset = unwrap_dataset(dataloader)
@@ -402,7 +403,7 @@ class EphysTokenizerModule(pl.LightningModule):
 
         # Get hyperparameters
         n_tokens = self.config.n_tokens
-        batch_size = batch_size or self.config.batch_size
+        batch_size = batch_size or self.config.training.batch_size
 
         # Tokenize data by subject
         tokens = self.tokenize_data(
@@ -486,7 +487,7 @@ class EphysTokenizerModule(pl.LightningModule):
         n_tokens = self.config.n_tokens
         n_channels = self.config.n_channels
         sequence_length = self.config.sequence_length
-        batch_size = self.config.batch_size
+        batch_size = self.config.training.batch_size
 
         # Get layer
         decoder_layer = self.model.decoder_layer
@@ -513,7 +514,7 @@ class EphysTokenizerModule(pl.LightningModule):
             with torch.inference_mode():
                 for batch in dataloader:
                     batch = batch[0].to(device)  # shape: (B, L, C)
-                    
+
                     batch = batch.permute(0, 2, 1)
                     batch = batch.reshape(-1, sequence_length)
                     batch = nn.functional.one_hot(batch, n_tokens).float()
@@ -630,13 +631,13 @@ class EphysTokenizerModule(pl.LightningModule):
         _logger.info(f"Device for PVE computation: {device}")
 
         # Set batch size
-        batch_size = batch_size or self.config.batch_size
+        batch_size = batch_size or self.config.training.batch_size
 
         # Unify torch dataset type
         dataset = unwrap_dataset(dataloader)
         if not isinstance(dataset, ConcatDataset):
             raise RuntimeError("Incorrect dataset type.")
-        
+
         # Get start and end sequence indices for each subject
         ranges = []
         offset = 0
@@ -754,7 +755,7 @@ class EphysTokenizerModule(pl.LightningModule):
             raise ValueError("Input array must be 1D.")
         else:
             raise ValueError("Unsupported input type.")
-        
+
         n_samples = input.shape[0]
 
         # Get token kernel layer
@@ -845,7 +846,8 @@ class EphysTokenizerModule(pl.LightningModule):
         """
         # Load configuration if not provided
         if config is None:
-            config = get_config(f"{dirname}/config.yml")
+            cfg = OmegaConf.load(f"{dirname}/config.yaml")
+            config = get_config(cfg.model_config)
 
         # Instantiate module
         model_module = cls(config)

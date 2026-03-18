@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import os
 import pickle
+from omegaconf import OmegaConf
 from pqdm.threads import pqdm
 from tqdm.auto import trange
 from typing import Union, List, Optional
@@ -366,7 +367,8 @@ class StandardQuantileTokenizer:
         config : Config
             Configuration object.
         """
-        return get_config(f"{dirname}/config.yml")
+        cfg = OmegaConf.load(f"{dirname}/config.yaml")
+        return get_config(cfg.model_config)
 
     @classmethod
     def load_model(cls, dirname: str):
