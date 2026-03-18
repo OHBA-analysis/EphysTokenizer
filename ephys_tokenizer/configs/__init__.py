@@ -2,13 +2,13 @@
 
 # Import packages
 from dataclasses import dataclass
-from typing import Union
+from omegaconf import DictConfig
 from ephys_tokenizer.configs.config import (
-    load_config,
     EphysTokenizerConfig,
     MuTransformTokenizerConfig,
     StandardQuantileTokenizerConfig,
 )
+from typing import Union
 
 
 CONFIGS = {
@@ -29,37 +29,33 @@ class Config:
         StandardQuantileTokenizerConfig,
     ] = None
 
+    def set_config(self, config: DictConfig) -> None:
+        self.config_class.set_config(config)
+
     def validate(self) -> None:
         self.config_class.validate()
 
-    def set_config(self, config: dict) -> None:
-        self.config_class.set_config(config)
 
-
-def get_config(config: Union[str, dict]) -> Config:
+def get_config(config: DictConfig) -> Config:
     """
     Returns a Config object based on the provided configuration.
 
     Parameters
     ----------
-    config : Union[str, dict]
-        Path to a yaml file, string to convert to dictionary,
-        or dictionary containing the config.
+    config : DictConfig
+        Dictionary containing the config.
 
     Returns
     -------
     cfg: Config
         Config object containing the tokenizer configuration.
     """
-    # Load configuration dictionary
-    config_dict = load_config(config)
-
     # Initialize config class
-    config_class = CONFIGS[config_dict["name"]]
+    config_class = CONFIGS[config.get("name", "ephys_tokenizer")]
     cfg = Config(config_class())
 
     # Set model and training configurations
-    cfg.set_config(config_dict)
+    cfg.set_config(config)
 
     # Validate configuration
     cfg.validate()
