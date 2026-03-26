@@ -589,7 +589,7 @@ class EphysTokenizerModule(pl.LightningModule):
             remapped_t = (
                 np.ones(t.shape, dtype=np.int32) * unused_token_labels[0]
             )  # use first of all unused tokens for outliers
-            t -= 1
+            t = t - 1
             remapped_t[t >= 0] = self.vocab["token_order"][t[t >= 0]]
             remapped_tokens.append(remapped_t)
 
