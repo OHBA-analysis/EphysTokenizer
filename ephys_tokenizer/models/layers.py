@@ -229,6 +229,10 @@ class DecoderLayer(nn.Module):
     token_kernel_padding : str
         Padding strategy for the token convolutional layers.
         Should be either 'same' or 'causal'.
+    token_kernel_bias : bool
+        Whether to use learnable bias in the token convolutional layers.
+    token_groups : int
+        Number of blocked connections from input channels to output channels.
     """
     def __init__(
         self,
@@ -237,6 +241,8 @@ class DecoderLayer(nn.Module):
         n_tokens: int,
         token_dim: int,
         token_kernel_padding: str,
+        token_kernel_bias: bool,
+        token_groups: int,
     ):
         super().__init__()
         self.n_channels = n_channels
@@ -250,6 +256,8 @@ class DecoderLayer(nn.Module):
             out_channels=self.n_tokens,
             kernel_size=self.token_dim,
             padding=0,  # applied manually (matches TF "same"/"causal")
+            bias=token_kernel_bias,
+            groups=token_groups,
         )
 
     def _pad(self, x: torch.Tensor) -> torch.Tensor:

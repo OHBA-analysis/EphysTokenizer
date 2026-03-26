@@ -39,6 +39,8 @@ class EphysTokenizerConfig:
     n_tokens: int = 256
     token_dim: int = 32
     token_kernel_padding: str = "same"
+    token_kernel_bias: bool = True
+    token_groups: int = 1
 
     # RNN defaults
     rnn_n_units: int = 64
@@ -62,6 +64,8 @@ class EphysTokenizerConfig:
         assert self.token_dim > 0, "token_dim must be greater than 0"
         assert self.token_kernel_padding in ["same", "causal"], \
             "token_kernel_padding must be 'same' or 'causal'"
+        assert self.token_kernel_bias is not None, "token_kernel_bias must be set"
+        assert self.token_groups > 0, "token_groups must be greater than 0"
         assert self.rnn_n_units > 0, "rnn_n_units must be greater than 0"
         assert self.rnn_type in ["gru", "lstm"], "rnn_type must be 'gru' or 'lstm'"
         assert self.rnn_n_layers > 0, "rnn_n_layers must be greater than 0"

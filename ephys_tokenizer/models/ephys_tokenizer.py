@@ -108,6 +108,8 @@ class EphysTokenizer(nn.Module):
             n_tokens=self.config.n_tokens,
             token_dim=self.config.token_dim,
             token_kernel_padding=self.config.token_kernel_padding,
+            token_kernel_bias=self.config.token_kernel_bias,
+            token_groups=self.config.token_groups,
         )
         self.mse_loss_layer = MSELossLayer()
 
