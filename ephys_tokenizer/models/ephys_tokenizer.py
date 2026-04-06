@@ -311,49 +311,37 @@ class EphysTokenizerModule(pl.LightningModule):
 
         # Put model in evaluation mode
         model = self.model.to(device).eval()
-        sequence_length = self.config.sequence_length
         n_channels = self.config.n_channels
         n_tokens = self.config.n_tokens
 
-        # Preallocate arrays for tokens (and weights if requested)
-        tokens = torch.empty(
-            (n_total_sequences, sequence_length, n_channels),
-            dtype=torch.int64,
-            device=device,
-        )
-        weights = None
-        if return_weights:
-            weights = torch.empty(
-                (n_total_sequences, sequence_length, n_channels, n_tokens),
-                dtype=torch.float32,
-                device="cpu",
-            ).pin_memory()
+        # Accumulate tokens (and weights) per batch (performed on CPU to avoid GPU OOM)
+        tokens_list = []
+        weights_list = [] if return_weights else None
 
-        idx = 0
         with torch.inference_mode():
             for batch in tqdm(worker_dl, desc="Tokenizing batches ...", total=len(worker_dl)):
-                x = batch["data"]
-                if x.device != device:
-                    x = x.to(device, non_blocking=True)
+                x = batch["data"].to(device, non_blocking=True)
 
                 _, _, tw = model(x)  # shape: (B, L, C, N_t)
-                t = tw.argmax(dim=-1)  # shape: (B, L, C)
-                bsz = t.shape[0]
-                tokens[idx:idx + bsz].copy_(t)
+                t = tw.argmax(dim=-1).cpu()  # shape: (B, L, C)
+                tokens_list.append(t)
 
                 if return_weights:
-                    weights[idx:idx + bsz].copy_(tw, non_blocking=True)
+                    weights_list.append(tw.cpu())
 
-                idx += bsz
+                del x, tw, t
+                torch.cuda.empty_cache()
 
-            # Synchronize CUDA to ensure all streams are finished
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+        # Concatenate accumulated batches into final arrays
+        tokens = torch.cat(tokens_list, dim=0).numpy()
+        # shape: (n_total_sequences, L, C)
+        del tokens_list
 
-        # Move all tensors to CPU at once
-        tokens = tokens.cpu().numpy()
+        weights = None
         if return_weights:
-            weights = weights.numpy()
+            weights = torch.cat(weights_list, dim=0).numpy()
+            # shape: (n_total_sequences, L, C, N_t)
+            del weights_list
 
         # Split tokens (and weights) by subject ranges
         all_tokens = []
