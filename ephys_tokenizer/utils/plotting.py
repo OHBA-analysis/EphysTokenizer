@@ -176,6 +176,7 @@ def plot_fitted_signal(
         Path to the original data file.
     reconstructed_data : Union[np.ndarray, List[np.ndarray]]
         Reconstructed data from the tokenized input.
+        Shape of each array should be (n_samples, n_channels).
     token_weights : Union[np.ndarray, List[np.ndarray]], optional
         Token weights for the reconstructed data.
     subject_idx : int, optional
@@ -183,6 +184,12 @@ def plot_fitted_signal(
     plot_dir : str, optional
         Directory to save the plot.
     """
+    # Validation
+    if not isinstance(reconstructed_data, list):
+        reconstructed_data = [reconstructed_data]
+    if not isinstance(token_weights, list):
+        token_weights = [token_weights]
+
     # Read original data
     file_extn = Path(original_data_path).suffix  # file extension
     if file_extn == ".fif":
