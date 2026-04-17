@@ -1,12 +1,22 @@
-"""PyTorch DataLoader and Lightning DataModule for tokenizer training."""
+"""PyTorch DataLoader and Lightning DataModule for tokenizer training.
+
+Also provides a generic h5-backed ``Dataset`` (``H5Session`` / ``H5Dataset`` /
+``build_h5_dataset``) that plugs into :class:`EphysDataModule` as a drop-in
+replacement for ``pnpl.datasets.CamcanGlasser``.
+"""
 
 # Import packages
 from __future__ import annotations
 
-import numpy as np
-import pytorch_lightning as pl
+import os
 import random
+
+import h5py
+import numpy as np
+import pandas as pd
+import pytorch_lightning as pl
 import torch
+from pathlib import Path
 from torch.utils.data import (
     ConcatDataset,
     DataLoader,
@@ -45,9 +55,9 @@ def _default_worker_init_fn(worker_id: int) -> None:
     torch.manual_seed(seed)
 
 
-def _collate_camcan(batch: Sequence[dict]) -> Dict[str, Any]:
+def _collate_default(batch: Sequence[dict]) -> Dict[str, Any]:
     """
-    Collate function for CamcanGlasser items.
+    Default collate function for session-window items.
 
     Each item is expected to be:
         {"data": np.ndarray (L, C), "times": np.ndarray (L,), "info": dict}
@@ -84,7 +94,7 @@ def _make_dataloader(
     persistent_workers: Optional[bool] = True,
     drop_last: Optional[bool] = False,
     sampler: Optional[Sampler] = None,
-    collate_fn=_collate_camcan,
+    collate_fn=_collate_default,
 ) -> DataLoader:
     """
     Creates a DataLoader for a given dataset.
@@ -130,9 +140,13 @@ def _make_dataloader(
     )
 
 
-class CamcanGlasserDataModule(pl.LightningDataModule):
+class EphysDataModule(pl.LightningDataModule):
     """
-    Lightning DataModule for the CamCAN dataset.
+    Lightning DataModule for continuous session-based datasets.
+
+    Expects the input dataset to wrap a ``ConcatDataset`` of per-session
+    sub-datasets (accessible via ``dataset.dataset``). Each sub-dataset must
+    expose a ``.subject`` attribute if subject-level splitting is used.
 
     Parameters
     ----------
@@ -441,3 +455,187 @@ class CamcanGlasserDataModule(pl.LightningDataModule):
             persistent_workers=self.persistent_workers,
             drop_last=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# Generic h5-backed Dataset
+# ---------------------------------------------------------------------------
+#
+# Mirrors the interface consumed by :class:`EphysDataModule`:
+#   - Top-level object exposes ``.dataset`` as a ``ConcatDataset`` of
+#     per-session sub-datasets.
+#   - Each sub-dataset has a ``.subject`` attribute for subject-level splits.
+#   - Each item is ``{"data": (L, C) float32, "times": (L,) float32,
+#     "info": dict}``.
+#
+# Each h5 file is expected to hold a single ``"data"`` dataset of shape
+# ``(n_samples, n_channels)``.
+
+
+class H5Session(Dataset):
+    """Non-overlapping windowed view of one h5 session file.
+
+    Parameters
+    ----------
+    h5_path : str
+        Path to a session h5 file containing a single ``"data"`` dataset of
+        shape ``(n_samples, n_channels)``.
+    window_len : int
+        Window length in samples; windows are non-overlapping. Any trailing
+        samples shorter than ``window_len`` are dropped.
+    sfreq : float
+        Sample rate in Hz, used only to populate the ``times`` array.
+    info : dict
+        Metadata dict copied into every item's ``info`` field. Must contain a
+        ``"subject"`` key if subject-level splitting will be used downstream.
+    standardize : bool
+        If True, compute per-channel mean/std across the full session at
+        construction time and apply z-score normalisation in ``__getitem__``.
+    """
+
+    def __init__(
+        self,
+        h5_path: str,
+        window_len: int,
+        sfreq: float,
+        info: Dict[str, Any],
+        standardize: bool = True,
+    ):
+        self.h5_path = str(h5_path)
+        self.window_len = int(window_len)
+        self.sfreq = float(sfreq)
+        self.info = dict(info)
+        self.standardize = bool(standardize)
+
+        # Required by EphysDataModule subject-splitting.
+        self.subject = self.info.get("subject")
+
+        with h5py.File(self.h5_path, "r") as f:
+            ds = f["data"]
+            self.n_samples = int(ds.shape[0])
+            self.n_channels = int(ds.shape[1])
+            if self.standardize:
+                data = ds[...].astype(np.float64)
+                self._mean = data.mean(axis=0).astype(np.float32)
+                std = data.std(axis=0)
+                std[std < 1e-8] = 1.0
+                self._std = std.astype(np.float32)
+            else:
+                self._mean = None
+                self._std = None
+
+        self.n_windows = self.n_samples // self.window_len
+        # Opened lazily per process; re-opened if the PID changes so a handle
+        # opened in the main process isn't reused (and silently desynced) by a
+        # forked DataLoader worker.
+        self._h5: Optional[h5py.File] = None
+        self._h5_pid: Optional[int] = None
+
+    def __len__(self) -> int:
+        return self.n_windows
+
+    def __getstate__(self) -> Dict[str, Any]:
+        # Strip the handle so the dataset pickles cleanly into workers
+        # (spawn multiprocessing context).
+        state = self.__dict__.copy()
+        state["_h5"] = None
+        state["_h5_pid"] = None
+        return state
+
+    def _handle(self) -> h5py.File:
+        pid = os.getpid()
+        if self._h5 is None or self._h5_pid != pid:
+            self._h5 = h5py.File(self.h5_path, "r")
+            self._h5_pid = pid
+        return self._h5
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        if idx < 0 or idx >= self.n_windows:
+            raise IndexError(idx)
+        start = idx * self.window_len
+        end = start + self.window_len
+        data = self._handle()["data"][start:end, :].astype(np.float32, copy=False)
+        if self.standardize:
+            data = (data - self._mean) / self._std
+        times = np.arange(start, end, dtype=np.float32) / self.sfreq
+        return {"data": data, "times": times, "info": self.info}
+
+
+class H5Dataset(Dataset):
+    """Concatenation of :class:`H5Session` datasets.
+
+    Exposes ``.dataset`` as a ``ConcatDataset`` so it is a drop-in replacement
+    for ``pnpl.datasets.CamcanGlasser`` when used with
+    :class:`EphysDataModule`.
+    """
+
+    def __init__(self, sessions: Sequence[H5Session]):
+        if len(sessions) == 0:
+            raise ValueError("H5Dataset requires at least one session.")
+        self.dataset = ConcatDataset(list(sessions))
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        return self.dataset[idx]
+
+
+def build_h5_dataset(
+    sessions_csv: str,
+    h5_dir: str,
+    window_len: int,
+    sfreq: float = 250.0,
+    standardize: bool = True,
+    include_sessions: Optional[Sequence[str]] = None,
+    info_cols: Sequence[str] = (
+        "session",
+        "dataset",
+        "subject",
+        "task",
+        "system",
+        "age",
+        "sex",
+    ),
+) -> H5Dataset:
+    """Build an :class:`H5Dataset` from a sessions CSV.
+
+    Parameters
+    ----------
+    sessions_csv : str
+        Path to a CSV indexing h5 sessions. Must contain a ``session`` column
+        and columns named in ``info_cols``.
+    h5_dir : str
+        Directory containing ``{session}.h5`` files.
+    window_len : int
+        Number of samples per window.
+    sfreq : float
+        Sample rate in Hz (default 250 Hz).
+    standardize : bool
+        Apply per-session, per-channel z-score normalisation.
+    include_sessions : Optional[Sequence[str]]
+        If given, restrict to these session IDs.
+    info_cols : Sequence[str]
+        Columns copied from the CSV into each item's ``info`` dict.
+    """
+    df = pd.read_csv(sessions_csv)
+    if include_sessions is not None:
+        df = df[df["session"].isin(set(include_sessions))]
+    if df.empty:
+        raise ValueError("No sessions selected from CSV.")
+
+    h5_dir_path = Path(h5_dir)
+    sessions: List[H5Session] = []
+    for _, row in df.iterrows():
+        info = {c: row[c] for c in info_cols if c in row}
+        h5_path = h5_dir_path / f"{row['session']}.h5"
+        sessions.append(
+            H5Session(
+                h5_path=str(h5_path),
+                window_len=window_len,
+                sfreq=sfreq,
+                info=info,
+                standardize=standardize,
+            )
+        )
+    return H5Dataset(sessions)
