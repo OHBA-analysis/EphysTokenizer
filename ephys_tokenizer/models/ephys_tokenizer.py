@@ -652,12 +652,13 @@ class EphysTokenizerModule(pl.LightningModule):
 
         # Put model in evaluation mode
         model = self.model.to(device).eval()
-        sequence_length = self.config.sequence_length
-        n_channels = self.config.n_channels
 
-        # Preallocate arrays for tokens (and weights if requested)
-        original_x = torch.empty((n_total_sequences, sequence_length, n_channels), dtype=torch.float32, device=device)
-        reconstructed_x = torch.empty((n_total_sequences, sequence_length, n_channels), dtype=torch.float32, device=device)
+        # Stream per-session sum-of-squared-error and sum-of-squared-total
+        # through the dataloader
+        n_sessions = len(ranges)
+        sess_sse = np.zeros(n_sessions, dtype=np.float64)
+        sess_sst = np.zeros(n_sessions, dtype=np.float64)
+        range_starts = np.array([r[1] for r in ranges], dtype=np.int64)
 
         idx = 0
         with torch.inference_mode():
@@ -668,37 +669,25 @@ class EphysTokenizerModule(pl.LightningModule):
 
                 _, rx, _ = model(x)  # shape: (B, L, C)
 
-                bsz = x.shape[0]  # actual batch size (last batch may be smaller)
-                original_x[idx:idx + bsz].copy_(x)
-                reconstructed_x[idx:idx + bsz].copy_(rx)
+                bsz = x.shape[0]
+                sse_b = ((x - rx) ** 2).sum(dim=(1, 2)).cpu().numpy()  # (B,)
+                sst_b = (x ** 2).sum(dim=(1, 2)).cpu().numpy()         # (B,)
+
+                # Map each window to its session index (ranges are contiguous)
+                positions = np.arange(idx, idx + bsz, dtype=np.int64)
+                sess_ix = np.searchsorted(range_starts, positions, side="right") - 1
+                np.add.at(sess_sse, sess_ix, sse_b)
+                np.add.at(sess_sst, sess_ix, sst_b)
 
                 idx += bsz
 
-        # Move all tensors to CPU at once
-        original_x = original_x.cpu().numpy()
-        reconstructed_x = reconstructed_x.cpu().numpy()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pve = 100.0 * (1.0 - sess_sse / sess_sst)
+        pve = np.where(sess_sst > 0, pve, 0.0)
 
-        # Split by subject ranges
-        all_original_x = []
-        all_reconstructed_x = []
-        for _, start, end in ranges:
-            all_original_x.append(original_x[start:end].reshape(-1, n_channels))
-            all_reconstructed_x.append(reconstructed_x[start:end].reshape(-1, n_channels))
-            # all_*_x.shape: (N, T, C)
-
-        pve = []
-        for x, rx in tqdm(
-            zip(all_original_x, all_reconstructed_x),
-            desc="Calculating Percentage of Variance Explained ...",
-            total=len(all_original_x),
-        ):
-            pve.append(
-                100 * (1 - np.sum((x - rx) ** 2) / np.sum(x ** 2))
-            )
-
-        if len(pve) == 1:
-            return pve[0]
-        return np.array(pve)
+        if n_sessions == 1:
+            return float(pve[0])
+        return pve
 
     def get_token_kernel_response(
         self,
