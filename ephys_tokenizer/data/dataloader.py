@@ -489,9 +489,8 @@ class H5Session(Dataset):
         Metadata dict copied into every item's ``info`` field. Must contain a
         ``"subject"`` key if subject-level splitting will be used downstream.
     standardize : bool
-        If True, apply per-channel, per-session standardisation using the
-        outlier-robust estimator median + 1.4826·MAD (consistent with mean/std
-        for Gaussian data, but unaffected by localised artefacts).
+        If True, apply per-channel, per-session z-score standardisation
+        (subtract mean, divide by standard deviation).
     """
 
     def __init__(
@@ -517,11 +516,8 @@ class H5Session(Dataset):
             self.n_channels = int(ds.shape[1])
             if self.standardize:
                 data = ds[...].astype(np.float64)
-                centre = np.median(data, axis=0)
-                scale = 1.4826 * np.median(np.abs(data - centre), axis=0)
-                scale[scale < 1e-8] = 1.0
-                self._mean = centre.astype(np.float32)
-                self._std = scale.astype(np.float32)
+                self._mean = data.mean(axis=0).astype(np.float32)
+                self._std = data.std(axis=0).astype(np.float32)
             else:
                 self._mean = None
                 self._std = None
@@ -614,8 +610,7 @@ def build_h5_dataset(
     sfreq : float
         Sample rate in Hz (default 250 Hz).
     standardize : bool
-        Apply per-session, per-channel robust standardisation
-        (median + 1.4826·MAD).
+        Apply per-session, per-channel z-score standardisation.
     include_sessions : Optional[Sequence[str]]
         If given, restrict to these session IDs.
     info_cols : Sequence[str]
