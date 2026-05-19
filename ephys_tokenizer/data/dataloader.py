@@ -1,21 +1,21 @@
-"""PyTorch DataLoader and Lightning DataModule for tokenizer training.
+"""
+PyTorch DataLoader and Lightning DataModule for tokenizer training.
 
-Also provides a generic h5-backed ``Dataset`` (``H5Session`` / ``H5Dataset`` /
-``build_h5_dataset``) that plugs into :class:`EphysDataModule` as a drop-in
-replacement for ``pnpl.datasets.CamcanGlasser``.
+Provides a generic h5-backed ``Dataset`` (``H5Session`` / ``H5Dataset`` /
+``build_h5_dataset``) that plugs into :class:`EphysDataModule`.
 """
 
 # Import packages
 from __future__ import annotations
 
-import os
-import random
-
 import h5py
 import numpy as np
+import os
 import pandas as pd
 import pytorch_lightning as pl
+import random
 import torch
+
 from pathlib import Path
 from torch.utils.data import (
     ConcatDataset,
@@ -218,7 +218,7 @@ class EphysDataModule(pl.LightningDataModule):
         Returns index ranges for each subject in the dataset.
 
         Note that the output relies on ConcatDataset.datasets being in
-        the same order as subjects you provided to CamcanGlasser.
+        the same order as the subjects you used to build the dataset.
 
         Returns
         -------
@@ -473,7 +473,8 @@ class EphysDataModule(pl.LightningDataModule):
 
 
 class H5Session(Dataset):
-    """Non-overlapping windowed view of one h5 session file.
+    """
+    Non-overlapping windowed view of one h5 session file.
 
     Parameters
     ----------
@@ -507,7 +508,7 @@ class H5Session(Dataset):
         self.info = dict(info)
         self.standardize = bool(standardize)
 
-        # Required by EphysDataModule subject-splitting.
+        # Required by EphysDataModule subject-splitting logic
         self.subject = self.info.get("subject")
 
         with h5py.File(self.h5_path, "r") as f:
@@ -525,7 +526,7 @@ class H5Session(Dataset):
         self.n_windows = self.n_samples // self.window_len
         # Opened lazily per process; re-opened if the PID changes so a handle
         # opened in the main process isn't reused (and silently desynced) by a
-        # forked DataLoader worker.
+        # forked DataLoader worker
         self._h5: Optional[h5py.File] = None
         self._h5_pid: Optional[int] = None
 
@@ -534,7 +535,7 @@ class H5Session(Dataset):
 
     def __getstate__(self) -> Dict[str, Any]:
         # Strip the handle so the dataset pickles cleanly into workers
-        # (spawn multiprocessing context).
+        # (spawn multiprocessing context)
         state = self.__dict__.copy()
         state["_h5"] = None
         state["_h5_pid"] = None
@@ -560,11 +561,11 @@ class H5Session(Dataset):
 
 
 class H5Dataset(Dataset):
-    """Concatenation of :class:`H5Session` datasets.
+    """
+    Concatenates :class:`H5Session` datasets.
 
-    Exposes ``.dataset`` as a ``ConcatDataset`` so it is a drop-in replacement
-    for ``pnpl.datasets.CamcanGlasser`` when used with
-    :class:`EphysDataModule`.
+    Here, ``.dataset`` is exposed as a ``ConcatDataset`` so it can be
+    used with :class:`EphysDataModule`.
     """
 
     def __init__(self, sessions: Sequence[H5Session]):
@@ -596,7 +597,8 @@ def build_h5_dataset(
         "sex",
     ),
 ) -> H5Dataset:
-    """Build an :class:`H5Dataset` from a sessions CSV.
+    """
+    Builds an :class:`H5Dataset` from a sessions CSV.
 
     Parameters
     ----------
@@ -608,7 +610,7 @@ def build_h5_dataset(
     window_len : int
         Number of samples per window.
     sfreq : float
-        Sample rate in Hz (default 250 Hz).
+        Sampling frequency in Hz. Defaults to 250 Hz.
     standardize : bool
         Apply per-session, per-channel z-score standardisation.
     include_sessions : Optional[Sequence[str]]

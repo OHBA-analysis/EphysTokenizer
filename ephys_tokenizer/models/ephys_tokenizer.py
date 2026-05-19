@@ -593,7 +593,7 @@ class EphysTokenizerModule(pl.LightningModule):
         batch_size: Optional[int] = None,
         device: Optional[str] = None,
         num_workers: Optional[int] = 4,
-    ) -> np.ndarray:
+    ) -> Union[float, np.ndarray]:
         """
         Computes the percentage of variance explained by the tokens.
 
@@ -608,7 +608,7 @@ class EphysTokenizerModule(pl.LightningModule):
 
         Returns
         -------
-        pve : np.ndarray
+        pve : float or np.ndarray
             The percentage of variance explained by the tokens for each subject/session.
         """
         _logger.info("Getting percentage of variance explained ...")
@@ -670,8 +670,8 @@ class EphysTokenizerModule(pl.LightningModule):
                 _, rx, _ = model(x)  # shape: (B, L, C)
 
                 bsz = x.shape[0]
-                sse_b = ((x - rx) ** 2).sum(dim=(1, 2)).cpu().numpy()  # (B,)
-                sst_b = (x ** 2).sum(dim=(1, 2)).cpu().numpy()         # (B,)
+                sse_b = ((x - rx) ** 2).sum(dim=(1, 2)).cpu().numpy()  # shape: (B,)
+                sst_b = (x ** 2).sum(dim=(1, 2)).cpu().numpy()  # shape: (B,)
 
                 # Map each window to its session index (ranges are contiguous)
                 positions = np.arange(idx, idx + bsz, dtype=np.int64)
@@ -687,7 +687,7 @@ class EphysTokenizerModule(pl.LightningModule):
 
         if n_sessions == 1:
             return float(pve[0])
-        return pve
+        return pve  # shape: (N,)
 
     def get_token_kernel_response(
         self,
