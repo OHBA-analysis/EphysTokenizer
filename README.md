@@ -3,7 +3,7 @@
 **EphysTokenizer** is a data-driven, sample-level tokenizer for non-invasive human electrophysiological signals (MEG/EEG). It discretizes continuous neural time series into integer token sequences at each time step. By training an autoencoder with an RNN-based encoder and a convolutional decoder, the model learns a quantization scheme through signal reconstruction, enabling end-to-end tokenization directly from raw time-domain samples.
 
 <div align="center">
-    <img src="assets/model_architecture.png" alt="EphysTokenizer Overview" width="25%">
+    <img src="assets/model_architecture.png" alt="EphysTokenizer Overview" width="40%">
     <p><strong>Overview of the EphysTokenizer Architecture</strong></p>
 </div>
 

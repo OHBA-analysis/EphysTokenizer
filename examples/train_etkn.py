@@ -11,7 +11,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import CSVLogger
 
 from ephys_tokenizer.configs import get_config
-from ephys_tokenizer.data.dataloader import CamcanGlasserDataModule
+from ephys_tokenizer.data.dataloader import EphysDataModule
 from ephys_tokenizer.models import callbacks
 from ephys_tokenizer.models.ephys_tokenizer import EphysTokenizerModule
 from ephys_tokenizer.utils import plotting
@@ -35,6 +35,9 @@ def main(cfg: DictConfig):
     deterministic = cfg.main.deterministic
     seed = cfg.main.seed
     checkpoint = cfg.main.checkpoint
+
+    # Set data config
+    Fs = cfg.data_config.sampling_frequency
 
     # Load tokenizer model config
     model_config = get_config(cfg.model_config)  # Config object
@@ -67,11 +70,12 @@ def main(cfg: DictConfig):
         info=["subject", "dataset", "subject_id", "session"],
         picks="misc",
         reject_by_annotation="omit",
+        sampling_frequency=Fs,
         standardize=True,
         include_subjects=subject_ids,
         verbose=False,
     )
-    camcan_datamodule = CamcanGlasserDataModule(
+    camcan_datamodule = EphysDataModule(
         dataset=camcan_data,
         batch_size=batch_size,
         val_split=0,
