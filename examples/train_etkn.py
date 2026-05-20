@@ -36,6 +36,9 @@ def main(cfg: DictConfig):
     seed = cfg.main.seed
     checkpoint = cfg.main.checkpoint
 
+    # Set data config
+    Fs = cfg.data_config.sampling_frequency
+
     # Load tokenizer model config
     model_config = get_config(cfg.model_config)  # Config object
     model_cfg = model_config.config_class  # tokenizer-specific Config object
@@ -67,6 +70,7 @@ def main(cfg: DictConfig):
         info=["subject", "dataset", "subject_id", "session"],
         picks="misc",
         reject_by_annotation="omit",
+        sampling_frequency=Fs,
         standardize=True,
         include_subjects=subject_ids,
         verbose=False,

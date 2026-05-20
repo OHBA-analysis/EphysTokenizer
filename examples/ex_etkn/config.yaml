@@ -7,6 +7,10 @@ main:
   seed: 0              # random seed
   checkpoint: null     # path to a pre-trained model checkpoint
 
+# Dataset Settings
+data_config:
+  sampling_frequency: 250  # unit: Hz
+
 # Tokenizer Settings
 model_config:
 
