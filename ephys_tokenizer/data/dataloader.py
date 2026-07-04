@@ -5,16 +5,12 @@ Provides windowed ``Dataset`` s that plug into :class:`EphysDataModule`. A
 backend-agnostic :class:`WindowedSession` base handles windowing and per-session
 standardisation; concrete backends only supply the data source:
 
-- :class:`H5Session` / :func:`build_h5_dataset` — a ``"data"`` array of shape
-  ``(n_samples, n_channels)`` per session, sliced lazily from the h5 file.
-- :class:`FIFSession` / :func:`build_fif_dataset` — parcellated MEG FIFs read via
-  MNE, to train directly on parcel time courses with no h5 materialisation step.
-
-:class:`SessionDataset` concatenates sessions of either backend, so
-:class:`EphysDataModule` is agnostic to the source.
+- :class:`H5Session` / :func:`build_h5_dataset`: a ``"data"`` array of shape
+  ``(n_samples, n_channels)`` per session, sliced lazily from a h5 file.
+- :class:`FIFSession` / :func:`build_fif_dataset`: parcellated MEG FIFs read
+  via MNE-Python
 """
 
-# Import packages
 from __future__ import annotations
 
 import h5py
@@ -466,31 +462,12 @@ class EphysDataModule(pl.LightningDataModule):
         )
 
 
-# ---------------------------------------------------------------------------
-# Generic h5-backed Dataset
-# ---------------------------------------------------------------------------
-#
-# Mirrors the interface consumed by :class:`EphysDataModule`:
-#   - Top-level object exposes ``.dataset`` as a ``ConcatDataset`` of
-#     per-session sub-datasets.
-#   - Each sub-dataset has a ``.subject`` attribute for subject-level splits.
-#   - Each item is ``{"data": (L, C) float32, "times": (L,) float32,
-#     "info": dict}``.
-#
-# Each h5 file is expected to hold a single ``"data"`` dataset of shape
-# ``(n_samples, n_channels)``.
-
-
 class WindowedSession(Dataset):
     """
-    Backend-agnostic non-overlapping windowed view of one session.
+    Non-overlapping windowed view of one session.
 
-    Handles everything common to a backend: fixed-length non-overlapping
-    windows, optional per-channel per-session z-score standardisation, a
-    PID-aware lazily-opened resource (re-opened if the process changes so a
-    handle from the main process isn't reused by a worker), and the
-    ``{"data", "times", "info"}`` item schema expected by
-    :func:`_collate_default` / :class:`EphysDataModule`.
+    Fixed-length non-overlapping windows, optional per-channel per-session
+    z-score standardisation.
 
     Subclasses supply only the data source, via three hooks:
 
@@ -551,7 +528,7 @@ class WindowedSession(Dataset):
         self._resource: Optional[Any] = None
         self._resource_pid: Optional[int] = None
 
-    # -- backend hooks -------------------------------------------------------
+    # backend hooks
     def _load_array(self) -> np.ndarray:
         raise NotImplementedError
 
@@ -561,7 +538,7 @@ class WindowedSession(Dataset):
     def _read_window(self, resource: Any, start: int, end: int) -> np.ndarray:
         raise NotImplementedError
 
-    # -- shared behaviour ----------------------------------------------------
+    # shared behaviour
     def __len__(self) -> int:
         return self.n_windows
 
@@ -712,9 +689,6 @@ def build_h5_dataset(
     return SessionDataset(sessions)
 
 
-# ---------------------------------------------------------------------------
-# FIF-backed sessions
-# ---------------------------------------------------------------------------
 def load_session_array(path: str, picks: str = "misc") -> np.ndarray:
     """Load a parcellated FIF as a ``(n_samples, n_channels)`` float32 array.
 
@@ -739,11 +713,12 @@ def load_session_array(path: str, picks: str = "misc") -> np.ndarray:
 class FIFSession(WindowedSession):
     """FIF-backed windowed session.
 
-    FIF counterpart of :class:`H5Session`: reads parcel time courses from a
-    parcellated FIF via MNE (``picks``, bad segments omitted) instead of an h5
-    ``"data"`` array. FIFs cannot be memory-mapped like h5, so the whole session
-    array is loaded once per worker process and cached — a worker's peak memory
-    scales with the number of sessions it touches.
+    Reads parcel time courses from a parcellated FIF via MNE-Python (``picks``,
+    bad segments omitted).
+
+    FIFs cannot be memory-mapped like h5, so the whole session array is loaded
+    once per worker process and cached — a worker's peak memory scales with the
+    number of sessions it touches.
 
     Parameters
     ----------
@@ -752,7 +727,7 @@ class FIFSession(WindowedSession):
     window_len, sfreq, info, standardize
         See :class:`WindowedSession`.
     picks : str
-        MNE picks selecting the parcel channels.
+        Selected parcel type or channels.
     """
 
     def __init__(
@@ -799,9 +774,8 @@ def build_fif_dataset(
 ) -> SessionDataset:
     """Builds a :class:`SessionDataset` of :class:`FIFSession` from a sessions CSV.
 
-    FIF counterpart of :func:`build_h5_dataset`. Each session's parcel data is
-    read from the FIF path in ``row[fif_col]`` (default ``"parc_file"``) instead
-    of ``h5_dir/{session}.h5``.
+    Each session's parcel data is read from the FIF path in ``row[fif_col]``
+    (default ``"parc_file"``).
 
     Parameters
     ----------
