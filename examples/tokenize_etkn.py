@@ -56,6 +56,9 @@ def main():
     ap.add_argument("--seconds", type=float, default=60.0,
                     help="length of the synthetic signal to tokenise")
     ap.add_argument("--sfreq", type=float, default=250.0)
+    ap.add_argument("--margin", type=int, default=0,
+                    help="context margin M dropped at each window edge (0 keeps all "
+                         "samples; >0, e.g. token_dim, gives full clean context)")
     ap.add_argument("--out", default="tokenize_example.png",
                     help="where to save the original-vs-reconstructed plot")
     args = ap.parse_args()
@@ -70,8 +73,9 @@ def main():
     print(f"Signal:  {signal.shape}  "
           f"({args.seconds:g}s @ {args.sfreq:g}Hz, {n_channels} ch)")
 
-    # ---------- tokenise (overlap-and-stitch) ----------
-    tokens = module.tokenize_session(signal, standardize=True, remap=True)
+    # ---------- tokenise ----------
+    tokens = module.tokenize_session(signal, margin=args.margin,
+                                     standardize=True, remap=True)
     print(f"Tokens:  {tokens.shape}  dtype={tokens.dtype}  "
           f"{len(np.unique(tokens))} distinct ids")
 
@@ -79,12 +83,11 @@ def main():
     recon = module.reconstruct_session(tokens)
     print(f"Recon:   {recon.shape}")
 
-    # tokenize_session drops the first/last M=token_dim samples; reconstruct_session
+    # tokenize_session drops the first/last `margin` samples; reconstruct_session
     # crops to a whole number of length-L windows. Align the original accordingly.
-    margin = module.config.token_dim
     std = signal.std(axis=0)
     signal_std = (signal - signal.mean(axis=0)) / np.where(std == 0.0, 1.0, std)
-    original = signal_std[margin:margin + recon.shape[0]]
+    original = signal_std[args.margin:args.margin + recon.shape[0]]
 
     pve = 1.0 - np.var(original - recon) / np.var(original)
     print(f"PVE (synthetic, illustrative only): {pve:.3f}")

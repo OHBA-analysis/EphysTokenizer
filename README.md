@@ -76,7 +76,7 @@ These scripts demonstrate how to configure, train, and evaluate the models. Each
 
 ### Tokenizing & detokenizing a recording
 
-Once you have a trained model, tokenise a **continuous recording** with `tokenize_session` and reconstruct it with `reconstruct_session`:
+Once you have a trained model, tokenise a continuous recording with `tokenize_session` and reconstruct it with `reconstruct_session`:
 
 ```python
 from ephys_tokenizer.models.ephys_tokenizer import EphysTokenizerModule
@@ -84,11 +84,9 @@ from ephys_tokenizer.models.ephys_tokenizer import EphysTokenizerModule
 model = EphysTokenizerModule.load_model(run_dir)   # a trained-model directory
 
 # signal: a continuous (n_samples, n_channels) array
-tokens = model.tokenize_session(signal)            # -> (n_samples - 2M, n_channels) uint token stream
+tokens = model.tokenize_session(signal)            # -> (n_samples, n_channels) uint token stream
 recon  = model.reconstruct_session(tokens)         # -> reconstructed signal
 ```
-
-`tokenize_session` uses **overlap-and-stitch**: it slides length-`L` windows with stride `L - 2M` and keeps only each window's clean middle `[M : L-M]`, so every token has full decoder context (the margin `M` defaults to the decoder token-kernel size). This is the recommended way to tokenise a recording.
 
 ## 📚 Project Structure
 

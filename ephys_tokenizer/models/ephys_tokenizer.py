@@ -376,31 +376,35 @@ class EphysTokenizerModule(pl.LightningModule):
     def tokenize_session(
         self,
         array: np.ndarray,
-        margin: Optional[int] = None,
+        margin: int = 0,
         standardize: Optional[bool] = True,
         remap: Optional[bool] = True,
         batch_size: Optional[int] = None,
         device: Optional[str] = None,
     ) -> np.ndarray:
         """
-        Tokenize a single continuous recording (overlap-and-stitch).
+        Tokenize a single continuous recording.
 
-        Slides length-``L`` windows over ``array`` with stride ``L - 2*margin`` and
-        keeps only each window's clean middle ``[margin : L - margin]``, so every
-        output token has ``margin`` samples of clean decoder context on both sides.
-        This avoids the boundary artifacts of :meth:`tokenize_data`, which
-        concatenates non-overlapping windows. The first and last ``margin`` samples
-        of the recording are dropped (no valid neighbours). This is the recommended
-        way to tokenize a continuous recording for downstream use.
+        Slides length-``L`` windows over ``array`` and stitches their tokens into a
+        single ``(n_samples - 2*margin, n_channels)`` stream.
+
+        With ``margin=0`` (the default) the windows tile the recording without
+        overlap and **every** time point is kept. With ``margin=M > 0`` the windows
+        overlap (stride ``L - 2M``) and only each window's clean middle
+        ``[M : L-M]`` is kept, so every output token has ``M`` samples of clean
+        decoder context on both sides (avoiding the boundary artifacts of
+        :meth:`tokenize_data`) — at the cost of dropping the first and last ``M``
+        samples of the recording. A natural full-context choice is
+        ``margin = config.token_dim`` (the decoder's receptive field).
 
         Parameters
         ----------
         array : np.ndarray
             Continuous recording, shape (n_samples, n_channels).
         margin : int, optional
-            Context margin ``M`` dropped at each window edge. Defaults to the
-            decoder token-kernel size (``config.token_dim``) — the decoder's
-            receptive field.
+            Context margin ``M`` dropped at each window edge. Defaults to 0 (keep
+            every time point). Set > 0 (e.g. ``config.token_dim``) to give every
+            token full clean decoder context, at the cost of the edge samples.
         standardize : bool, optional
             Z-score each channel over time before tokenizing (matches training).
             Defaults to True.
@@ -425,7 +429,7 @@ class EphysTokenizerModule(pl.LightningModule):
 
         N, C = array.shape
         L = self.config.sequence_length
-        M = self.config.token_dim if margin is None else int(margin)
+        M = int(margin)
         if N < L + 2 * M:
             raise ValueError(
                 f"Recording too short: {N} samples < L + 2*margin = {L + 2 * M}."
