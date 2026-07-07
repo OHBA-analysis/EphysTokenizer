@@ -18,7 +18,6 @@ In addition, this repository also provides baseline tokenization methods based o
 - [Quick Start](#️-quick-start)
 - [Project Structure](#-project-structure)
 - [Citation](#-citation)
-- [License](#-license)
 
 ## 🎯 Requirements
 
@@ -75,7 +74,7 @@ python train_baseline.py \
 
 These scripts demonstrate how to configure, train, and evaluate the models. Each run generates a `figures` subdirectory containing basic post hoc analysis outputs.
 
-### Tokenising & detokenising a recording
+### Tokenizing & detokenizing a recording
 
 Once you have a trained model, tokenise a **continuous recording** with `tokenize_session` and reconstruct it with `reconstruct_session`:
 
@@ -91,15 +90,7 @@ recon  = model.reconstruct_session(tokens)         # -> reconstructed signal
 
 `tokenize_session` uses **overlap-and-stitch**: it slides length-`L` windows with stride `L - 2M` and keeps only each window's clean middle `[M : L-M]`, so every token has full decoder context (the margin `M` defaults to the decoder token-kernel size). This is the recommended way to tokenise a recording.
 
-`examples/tokenize_etkn.py` is a runnable end-to-end demo (on a synthetic signal):
-
-```bash
-python tokenize_etkn.py --model-dir <run_dir_from_train_etkn>
-```
-
 ## 📚 Project Structure
-
-<details> <summary><strong>Directory Tree</strong></summary>
 
 ```
 EphysTokenizer-main/
@@ -141,8 +132,6 @@ EphysTokenizer-main/
     └── tokenize_etkn.py          # Example: tokenise + detokenise a recording
 ```
 
-</details>
-
 ## 📑 Citation
 
 If you find this work helpful, please cite the following paper:
@@ -167,7 +156,3 @@ For the `EphysTokenizer` with non-causal convolution kernels, please also cite:
     url={https://arxiv.org/pdf/2510.18080},
 }
 ```
-
-## 🪪 License
-
-Copyright (c) 2026 [OHBA Analysis Group](https://github.com/OHBA-analysis). `EphysTokenizer` is a free and open-source software licensed under the [MIT License](https://github.com/OHBA-analysis/EphysTokenizer/blob/main/LICENSE).
