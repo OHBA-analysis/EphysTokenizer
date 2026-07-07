@@ -3,16 +3,14 @@
 This is the natural follow-on to ``train_etkn.py``. Given a trained model (as
 saved by ``EphysTokenizerModule.save``), it:
 
-1. tokenises a continuous ``(n_samples, n_channels)`` signal into an integer token
+1. Tokenises a continuous ``(n_samples, n_channels)`` signal into an integer token
    stream with :meth:`EphysTokenizerModule.tokenize_session` — overlap-and-stitch:
    it slides length-``L`` windows with stride ``L - 2M`` and keeps only each
-   window's clean middle ``[M : L-M]``, so every token has full decoder context
-   (unlike :meth:`tokenize_data`, which concatenates non-overlapping windows); and
-2. reconstructs the signal from those tokens with
+   window's clean middle ``[M : L-M]``, so every token has full decoder context.
+2. Reconstructs the signal from those tokens with
    :meth:`EphysTokenizerModule.reconstruct_session`.
 
-A synthetic signal is used so the script is self-contained — swap in your own
-``(n_samples, n_channels)`` array to tokenise real data.
+A synthetic signal is used so the script is self-contained.
 
 Usage
 -----

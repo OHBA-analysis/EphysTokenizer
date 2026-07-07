@@ -252,8 +252,9 @@ class EphysTokenizerModule(pl.LightningModule):
 
         Operates on the (already-windowed) sequences yielded by ``dataloader``
         and concatenates each window's tokens end-to-end (windows used as-is, no
-        overlap handling). Used internally by :meth:`refactor_vocab`. To tokenize
-        a **continuous recording** for downstream use, prefer
+        overlap handling). Used internally by :meth:`refactor_vocab`.
+
+        To tokenize a continuous recording for downstream use, prefer
         :meth:`tokenize_session` (overlap-and-stitch, so every token has full
         decoder context).
 
@@ -389,7 +390,7 @@ class EphysTokenizerModule(pl.LightningModule):
         single ``(n_samples - 2*margin, n_channels)`` stream.
 
         With ``margin=0`` (the default) the windows tile the recording without
-        overlap and **every** time point is kept. With ``margin=M > 0`` the windows
+        overlap and every time point is kept. With ``margin=M > 0`` the windows
         overlap (stride ``L - 2M``) and only each window's clean middle
         ``[M : L-M]`` is kept, so every output token has ``M`` samples of clean
         decoder context on both sides (avoiding the boundary artifacts of
