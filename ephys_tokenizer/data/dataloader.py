@@ -1,9 +1,9 @@
 """
 PyTorch DataLoader and Lightning DataModule for tokenizer training.
 
-Provides windowed ``Dataset`` s that plug into :class:`EphysDataModule`. A
+Provides windowed ``Dataset`` that plugs into :class:`EphysDataModule`. A
 backend-agnostic :class:`WindowedSession` base handles windowing and per-session
-standardisation; concrete backends only supply the data source:
+standardisation; backends supply the data source:
 
 - :class:`H5Session` / :func:`build_h5_dataset`: a ``"data"`` array of shape
   ``(n_samples, n_channels)`` per session, sliced lazily from a h5 file.
@@ -469,7 +469,7 @@ class WindowedSession(Dataset):
     Fixed-length non-overlapping windows, optional per-channel per-session
     z-score standardisation.
 
-    Subclasses supply only the data source, via three hooks:
+    Subclasses supply the data source via three hooks:
 
     - ``_load_array()`` -> ``(n_samples, n_channels)`` array, read once at init
       to determine the length and standardisation statistics.
@@ -690,7 +690,8 @@ def build_h5_dataset(
 
 
 def load_session_array(path: str, picks: str = "misc") -> np.ndarray:
-    """Load a parcellated FIF as a ``(n_samples, n_channels)`` float32 array.
+    """
+    Load a parcellated FIF as a ``(n_samples, n_channels)`` float32 array.
 
     Bad-annotated segments are dropped (``reject_by_annotation="omit"``) so the
     returned array holds only good samples — matching the covariance/tokenisation
@@ -711,7 +712,8 @@ def load_session_array(path: str, picks: str = "misc") -> np.ndarray:
 
 
 class FIFSession(WindowedSession):
-    """FIF-backed windowed session.
+    """
+    FIF-backed windowed session.
 
     Reads parcel time courses from a parcellated FIF via MNE-Python (``picks``,
     bad segments omitted).
@@ -772,7 +774,8 @@ def build_fif_dataset(
         "sex",
     ),
 ) -> SessionDataset:
-    """Builds a :class:`SessionDataset` of :class:`FIFSession` from a sessions CSV.
+    """
+    Builds a :class:`SessionDataset` of :class:`FIFSession` from a sessions CSV.
 
     Each session's parcel data is read from the FIF path in ``row[fif_col]``
     (default ``"parc_file"``).
