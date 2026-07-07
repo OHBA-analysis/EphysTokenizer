@@ -1,11 +1,16 @@
 """
 PyTorch DataLoader and Lightning DataModule for tokenizer training.
 
-Provides a generic h5-backed ``Dataset`` (``H5Session`` / ``H5Dataset`` /
-``build_h5_dataset``) that plugs into :class:`EphysDataModule`.
+Provides windowed ``Dataset`` that plugs into :class:`EphysDataModule`. A
+backend-agnostic :class:`WindowedSession` base handles windowing and per-session
+standardisation; backends supply the data source:
+
+- :class:`H5Session` / :func:`build_h5_dataset`: a ``"data"`` array of shape
+  ``(n_samples, n_channels)`` per session, sliced lazily from a h5 file.
+- :class:`FIFSession` / :func:`build_fif_dataset`: parcellated MEG FIFs read
+  via MNE-Python
 """
 
-# Import packages
 from __future__ import annotations
 
 import h5py
@@ -457,30 +462,24 @@ class EphysDataModule(pl.LightningDataModule):
         )
 
 
-# ---------------------------------------------------------------------------
-# Generic h5-backed Dataset
-# ---------------------------------------------------------------------------
-#
-# Mirrors the interface consumed by :class:`EphysDataModule`:
-#   - Top-level object exposes ``.dataset`` as a ``ConcatDataset`` of
-#     per-session sub-datasets.
-#   - Each sub-dataset has a ``.subject`` attribute for subject-level splits.
-#   - Each item is ``{"data": (L, C) float32, "times": (L,) float32,
-#     "info": dict}``.
-#
-# Each h5 file is expected to hold a single ``"data"`` dataset of shape
-# ``(n_samples, n_channels)``.
-
-
-class H5Session(Dataset):
+class WindowedSession(Dataset):
     """
-    Non-overlapping windowed view of one h5 session file.
+    Non-overlapping windowed view of one session.
+
+    Fixed-length non-overlapping windows, optional per-channel per-session
+    z-score standardisation.
+
+    Subclasses supply the data source via three hooks:
+
+    - ``_load_array()`` -> ``(n_samples, n_channels)`` array, read once at init
+      to determine the length and standardisation statistics.
+    - ``_open()`` -> a per-process resource (e.g. an open file handle or an
+      in-memory array) that is cached and passed to ``_read_window``.
+    - ``_read_window(resource, start, end)`` -> the ``(window_len, n_channels)``
+      slice for one window.
 
     Parameters
     ----------
-    h5_path : str
-        Path to a session h5 file containing a single ``"data"`` dataset of
-        shape ``(n_samples, n_channels)``.
     window_len : int
         Window length in samples; windows are non-overlapping. Any trailing
         samples shorter than ``window_len`` are dropped.
@@ -491,7 +490,100 @@ class H5Session(Dataset):
         ``"subject"`` key if subject-level splitting will be used downstream.
     standardize : bool
         If True, apply per-channel, per-session z-score standardisation
-        (subtract mean, divide by standard deviation).
+        (subtract mean, divide by std; zero stds are treated as 1).
+    """
+
+    def __init__(
+        self,
+        window_len: int,
+        sfreq: float,
+        info: Dict[str, Any],
+        standardize: bool = True,
+    ):
+        self.window_len = int(window_len)
+        self.sfreq = float(sfreq)
+        self.info = dict(info)
+        self.standardize = bool(standardize)
+
+        # Required by EphysDataModule subject-splitting logic
+        self.subject = self.info.get("subject")
+
+        arr = self._load_array()
+        self.n_samples = int(arr.shape[0])
+        self.n_channels = int(arr.shape[1])
+        if self.standardize:
+            data = arr.astype(np.float64)
+            self._mean = data.mean(axis=0).astype(np.float32)
+            std = data.std(axis=0).astype(np.float32)
+            std[std == 0.0] = 1.0
+            self._std = std
+        else:
+            self._mean = None
+            self._std = None
+
+        self.n_windows = self.n_samples // self.window_len
+        # Opened lazily per process; re-opened if the PID changes so a resource
+        # opened in the main process isn't reused (and silently desynced) by a
+        # forked/spawned DataLoader worker.
+        self._resource: Optional[Any] = None
+        self._resource_pid: Optional[int] = None
+
+    # backend hooks
+    def _load_array(self) -> np.ndarray:
+        raise NotImplementedError
+
+    def _open(self) -> Any:
+        raise NotImplementedError
+
+    def _read_window(self, resource: Any, start: int, end: int) -> np.ndarray:
+        raise NotImplementedError
+
+    # shared behaviour
+    def __len__(self) -> int:
+        return self.n_windows
+
+    def __getstate__(self) -> Dict[str, Any]:
+        # Strip the per-process resource so the dataset pickles cleanly into
+        # workers (spawn multiprocessing context).
+        state = self.__dict__.copy()
+        state["_resource"] = None
+        state["_resource_pid"] = None
+        return state
+
+    def _handle(self) -> Any:
+        pid = os.getpid()
+        if self._resource is None or self._resource_pid != pid:
+            self._resource = self._open()
+            self._resource_pid = pid
+        return self._resource
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        if idx < 0 or idx >= self.n_windows:
+            raise IndexError(idx)
+        start = idx * self.window_len
+        end = start + self.window_len
+        data = self._read_window(self._handle(), start, end).astype(
+            np.float32, copy=False
+        )
+        if self.standardize:
+            data = (data - self._mean) / self._std
+        times = np.arange(start, end, dtype=np.float32) / self.sfreq
+        return {"data": data, "times": times, "info": self.info}
+
+
+class H5Session(WindowedSession):
+    """
+    h5-backed windowed session.
+
+    Reads a single ``"data"`` dataset of shape ``(n_samples, n_channels)`` and
+    slices windows lazily from the open file, so no full copy is held in memory.
+
+    Parameters
+    ----------
+    h5_path : str
+        Path to a session h5 file containing a ``"data"`` dataset.
+    window_len, sfreq, info, standardize
+        See :class:`WindowedSession`.
     """
 
     def __init__(
@@ -503,74 +595,30 @@ class H5Session(Dataset):
         standardize: bool = True,
     ):
         self.h5_path = str(h5_path)
-        self.window_len = int(window_len)
-        self.sfreq = float(sfreq)
-        self.info = dict(info)
-        self.standardize = bool(standardize)
+        super().__init__(window_len, sfreq, info, standardize)
 
-        # Required by EphysDataModule subject-splitting logic
-        self.subject = self.info.get("subject")
-
+    def _load_array(self) -> np.ndarray:
         with h5py.File(self.h5_path, "r") as f:
-            ds = f["data"]
-            self.n_samples = int(ds.shape[0])
-            self.n_channels = int(ds.shape[1])
-            if self.standardize:
-                data = ds[...].astype(np.float64)
-                self._mean = data.mean(axis=0).astype(np.float32)
-                self._std = data.std(axis=0).astype(np.float32)
-            else:
-                self._mean = None
-                self._std = None
+            return f["data"][...]
 
-        self.n_windows = self.n_samples // self.window_len
-        # Opened lazily per process; re-opened if the PID changes so a handle
-        # opened in the main process isn't reused (and silently desynced) by a
-        # forked DataLoader worker
-        self._h5: Optional[h5py.File] = None
-        self._h5_pid: Optional[int] = None
+    def _open(self) -> h5py.File:
+        return h5py.File(self.h5_path, "r")
 
-    def __len__(self) -> int:
-        return self.n_windows
-
-    def __getstate__(self) -> Dict[str, Any]:
-        # Strip the handle so the dataset pickles cleanly into workers
-        # (spawn multiprocessing context)
-        state = self.__dict__.copy()
-        state["_h5"] = None
-        state["_h5_pid"] = None
-        return state
-
-    def _handle(self) -> h5py.File:
-        pid = os.getpid()
-        if self._h5 is None or self._h5_pid != pid:
-            self._h5 = h5py.File(self.h5_path, "r")
-            self._h5_pid = pid
-        return self._h5
-
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        if idx < 0 or idx >= self.n_windows:
-            raise IndexError(idx)
-        start = idx * self.window_len
-        end = start + self.window_len
-        data = self._handle()["data"][start:end, :].astype(np.float32, copy=False)
-        if self.standardize:
-            data = (data - self._mean) / self._std
-        times = np.arange(start, end, dtype=np.float32) / self.sfreq
-        return {"data": data, "times": times, "info": self.info}
+    def _read_window(self, resource: h5py.File, start: int, end: int) -> np.ndarray:
+        return resource["data"][start:end, :]
 
 
-class H5Dataset(Dataset):
+class SessionDataset(Dataset):
     """
-    Concatenates :class:`H5Session` datasets.
+    Concatenates windowed sessions of any backend (:class:`WindowedSession`).
 
-    Here, ``.dataset`` is exposed as a ``ConcatDataset`` so it can be
-    used with :class:`EphysDataModule`.
+    ``.dataset`` is exposed as a ``ConcatDataset`` so it can be used with
+    :class:`EphysDataModule`.
     """
 
-    def __init__(self, sessions: Sequence[H5Session]):
+    def __init__(self, sessions: Sequence[WindowedSession]):
         if len(sessions) == 0:
-            raise ValueError("H5Dataset requires at least one session.")
+            raise ValueError("SessionDataset requires at least one session.")
         self.dataset = ConcatDataset(list(sessions))
 
     def __len__(self) -> int:
@@ -596,9 +644,9 @@ def build_h5_dataset(
         "age",
         "sex",
     ),
-) -> H5Dataset:
+) -> SessionDataset:
     """
-    Builds an :class:`H5Dataset` from a sessions CSV.
+    Builds a :class:`SessionDataset` from a sessions CSV.
 
     Parameters
     ----------
@@ -638,4 +686,141 @@ def build_h5_dataset(
                 standardize=standardize,
             )
         )
-    return H5Dataset(sessions)
+    return SessionDataset(sessions)
+
+
+def load_session_array(path: str, picks: str = "misc") -> np.ndarray:
+    """
+    Load a parcellated FIF as a ``(n_samples, n_channels)`` float32 array.
+
+    Bad-annotated segments are dropped (``reject_by_annotation="omit"``) so the
+    returned array holds only good samples — matching the covariance/tokenisation
+    convention used across the pipeline.
+
+    Parameters
+    ----------
+    path : str
+        Path to a parcellated ``*-raw.fif`` file.
+    picks : str
+        MNE picks selecting the parcel channels (parcels are stored as ``misc``).
+    """
+    import mne  # imported lazily so h5-only users need no MNE install
+
+    raw = mne.io.read_raw_fif(path, preload=True, verbose="ERROR")
+    data = raw.get_data(picks=picks, reject_by_annotation="omit", verbose="ERROR")
+    return np.ascontiguousarray(data.T, dtype=np.float32)
+
+
+class FIFSession(WindowedSession):
+    """
+    FIF-backed windowed session.
+
+    Reads parcel time courses from a parcellated FIF via MNE-Python (``picks``,
+    bad segments omitted).
+
+    FIFs cannot be memory-mapped like h5, so the whole session array is loaded
+    once per worker process and cached — a worker's peak memory scales with the
+    number of sessions it touches.
+
+    Parameters
+    ----------
+    fif_path : str
+        Path to a parcellated ``*-raw.fif`` file.
+    window_len, sfreq, info, standardize
+        See :class:`WindowedSession`.
+    picks : str
+        Selected parcel type or channels.
+    """
+
+    def __init__(
+        self,
+        fif_path: str,
+        window_len: int,
+        sfreq: float,
+        info: Dict[str, Any],
+        standardize: bool = True,
+        picks: str = "misc",
+    ):
+        self.fif_path = str(fif_path)
+        self.picks = str(picks)
+        super().__init__(window_len, sfreq, info, standardize)
+
+    def _load_array(self) -> np.ndarray:
+        return load_session_array(self.fif_path, picks=self.picks)
+
+    # The whole array is the per-process resource; windows are in-memory slices.
+    def _open(self) -> np.ndarray:
+        return load_session_array(self.fif_path, picks=self.picks)
+
+    def _read_window(self, resource: np.ndarray, start: int, end: int) -> np.ndarray:
+        return resource[start:end, :]
+
+
+def build_fif_dataset(
+    sessions_csv: str,
+    window_len: int,
+    sfreq: float = 250.0,
+    standardize: bool = True,
+    include_sessions: Optional[Sequence[str]] = None,
+    fif_col: str = "parc_file",
+    picks: str = "misc",
+    info_cols: Sequence[str] = (
+        "session",
+        "dataset",
+        "subject",
+        "task",
+        "system",
+        "age",
+        "sex",
+    ),
+) -> SessionDataset:
+    """
+    Builds a :class:`SessionDataset` of :class:`FIFSession` from a sessions CSV.
+
+    Each session's parcel data is read from the FIF path in ``row[fif_col]``
+    (default ``"parc_file"``).
+
+    Parameters
+    ----------
+    sessions_csv : str
+        Path to a CSV with a ``session`` column, a ``fif_col`` column of FIF
+        paths, and the columns named in ``info_cols``.
+    window_len : int
+        Number of samples per window.
+    sfreq : float
+        Sampling frequency in Hz.
+    standardize : bool
+        Apply per-session, per-channel z-score standardisation.
+    include_sessions : Optional[Sequence[str]]
+        If given, restrict to these session IDs.
+    fif_col : str
+        CSV column holding each session's FIF path.
+    picks : str
+        MNE picks selecting the parcel channels.
+    info_cols : Sequence[str]
+        Columns copied from the CSV into each item's ``info`` dict.
+    """
+    df = pd.read_csv(sessions_csv)
+    if include_sessions is not None:
+        df = df[df["session"].isin(set(include_sessions))]
+    if df.empty:
+        raise ValueError("No sessions selected from CSV.")
+    if fif_col not in df.columns:
+        raise ValueError(
+            f"sessions CSV '{sessions_csv}' has no '{fif_col}' column of FIF paths."
+        )
+
+    sessions: List[FIFSession] = []
+    for _, row in df.iterrows():
+        info = {c: row[c] for c in info_cols if c in row}
+        sessions.append(
+            FIFSession(
+                fif_path=str(row[fif_col]),
+                window_len=window_len,
+                sfreq=sfreq,
+                info=info,
+                standardize=standardize,
+                picks=picks,
+            )
+        )
+    return SessionDataset(sessions)
