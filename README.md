@@ -18,7 +18,6 @@ In addition, this repository also provides baseline tokenization methods based o
 - [Quick Start](#️-quick-start)
 - [Project Structure](#-project-structure)
 - [Citation](#-citation)
-- [License](#-license)
 
 ## 🎯 Requirements
 
@@ -75,9 +74,21 @@ python train_baseline.py \
 
 These scripts demonstrate how to configure, train, and evaluate the models. Each run generates a `figures` subdirectory containing basic post hoc analysis outputs.
 
-## 📚 Project Structure
+### Tokenizing & detokenizing a recording
 
-<details> <summary><strong>Directory Tree</strong></summary>
+Once you have a trained model, tokenise a continuous recording with `tokenize_session` and reconstruct it with `reconstruct_session`:
+
+```python
+from ephys_tokenizer.models.ephys_tokenizer import EphysTokenizerModule
+
+model = EphysTokenizerModule.load_model(run_dir)   # a trained-model directory
+
+# signal: a continuous (n_samples, n_channels) array
+tokens = model.tokenize_session(signal)            # -> (n_samples, n_channels) uint token stream
+recon  = model.reconstruct_session(tokens)         # -> reconstructed signal
+```
+
+## 📚 Project Structure
 
 ```
 EphysTokenizer-main/
@@ -115,10 +126,9 @@ EphysTokenizer-main/
     │   └── config.yaml           # YAML config for standard quantile experiment
     │
     ├── train_baseline.py         # Example script for baseline tokenizers
-    └── train_etkn.py             # Example training script for EphysTokenizer
+    ├── train_etkn.py             # Example training script for EphysTokenizer
+    └── tokenize_etkn.py          # Example: tokenise + detokenise a recording
 ```
-
-</details>
 
 ## 📑 Citation
 
@@ -144,7 +154,3 @@ For the `EphysTokenizer` with non-causal convolution kernels, please also cite:
     url={https://arxiv.org/pdf/2510.18080},
 }
 ```
-
-## 🪪 License
-
-Copyright (c) 2026 [OHBA Analysis Group](https://github.com/OHBA-analysis). `EphysTokenizer` is a free and open-source software licensed under the [MIT License](https://github.com/OHBA-analysis/EphysTokenizer/blob/main/LICENSE).

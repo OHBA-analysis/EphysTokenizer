@@ -250,6 +250,14 @@ class EphysTokenizerModule(pl.LightningModule):
         """
         Tokenizes data using the trained model.
 
+        Operates on the (already-windowed) sequences yielded by ``dataloader``
+        and concatenates each window's tokens end-to-end (windows used as-is, no
+        overlap handling). Used internally by :meth:`refactor_vocab`.
+
+        To tokenize a continuous recording for downstream use, prefer
+        :meth:`tokenize_session` (overlap-and-stitch, so every token has full
+        decoder context).
+
         Parameters
         ----------
         dataloader : DataLoader
@@ -365,6 +373,116 @@ class EphysTokenizerModule(pl.LightningModule):
                 all_weights = np.concatenate(all_weights, axis=0)
 
         return (all_tokens, all_weights) if return_weights else all_tokens
+
+    def tokenize_session(
+        self,
+        array: np.ndarray,
+        margin: int = 0,
+        standardize: Optional[bool] = True,
+        remap: Optional[bool] = True,
+        batch_size: Optional[int] = None,
+        device: Optional[str] = None,
+    ) -> np.ndarray:
+        """
+        Tokenize a single continuous recording.
+
+        Slides length-``L`` windows over ``array`` and stitches their tokens into a
+        single ``(n_samples - 2*margin, n_channels)`` stream.
+
+        With ``margin=0`` (the default) the windows tile the recording without
+        overlap and every time point is kept. With ``margin=M > 0`` the windows
+        overlap (stride ``L - 2M``) and only each window's clean middle
+        ``[M : L-M]`` is kept, so every output token has ``M`` samples of clean
+        decoder context on both sides (avoiding the boundary artifacts of
+        :meth:`tokenize_data`) — at the cost of dropping the first and last ``M``
+        samples of the recording. A natural full-context choice is
+        ``margin = config.token_dim`` (the decoder's receptive field).
+
+        Parameters
+        ----------
+        array : np.ndarray
+            Continuous recording, shape (n_samples, n_channels).
+        margin : int, optional
+            Context margin ``M`` dropped at each window edge. Defaults to 0 (keep
+            every time point). Set > 0 (e.g. ``config.token_dim``) to give every
+            token full clean decoder context, at the cost of the edge samples.
+        standardize : bool, optional
+            Z-score each channel over time before tokenizing (matches training).
+            Defaults to True.
+        remap : bool, optional
+            Remap tokens to their refactored vocabulary labels. Defaults to True.
+        batch_size : int, optional
+            Batch size for the window forward passes. Defaults to the training
+            batch size.
+        device : str, optional
+            Device to run on. Defaults to CUDA if available, else CPU.
+
+        Returns
+        -------
+        tokens : np.ndarray
+            Token stream, shape (n_samples - 2*margin, n_channels).
+        """
+        array = np.asarray(array)
+        if array.ndim != 2:
+            raise ValueError(
+                f"array must be 2D (n_samples, n_channels), got shape {array.shape}."
+            )
+
+        N, C = array.shape
+        L = self.config.sequence_length
+        M = int(margin)
+        if N < L + 2 * M:
+            raise ValueError(
+                f"Recording too short: {N} samples < L + 2*margin = {L + 2 * M}."
+            )
+
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(device)
+        batch_size = batch_size or self.config.training.batch_size
+
+        # Standardize each channel over time (as at training time).
+        if standardize:
+            mean = array.mean(axis=0)
+            std = array.std(axis=0)
+            std = np.where(std == 0.0, 1.0, std)
+            array = (array - mean) / std
+
+        # Overlapping window starts; anchor the last window at N - L so the tail
+        # is covered even when the recording doesn't divide evenly.
+        S = L - 2 * M
+        last_start = N - L
+        starts = list(range(0, last_start + 1, S))
+        if starts[-1] != last_start:
+            starts.append(last_start)
+
+        windows = np.stack([array[s:s + L] for s in starts])  # (W, L, C)
+
+        model = self.model.to(device).eval()
+        tokens_per_window = np.empty((len(starts), L, C), dtype=np.int64)
+        with torch.inference_mode():
+            for i in range(0, len(starts), batch_size):
+                x = torch.as_tensor(
+                    windows[i:i + batch_size], dtype=torch.float32, device=device
+                )
+                _, _, tw = model(x)  # (B, L, C, N_t)
+                tokens_per_window[i:i + batch_size] = tw.argmax(dim=-1).cpu().numpy()
+
+        # Stitch the clean middles. Window at start s writes out indices [s, s+S);
+        # its clean tokens are [M : L-M]. The final (anchored) window overwrites any
+        # overlap with the correct tail.
+        n_keep = N - 2 * M
+        out = np.empty((n_keep, C), dtype=np.int64)
+        for k, s in enumerate(starts):
+            out_end = min(s + S, n_keep)
+            out[s:out_end] = tokens_per_window[k, M:M + (out_end - s)]
+
+        if remap:
+            if not self.vocab:
+                raise ValueError("Vocabulary is empty. Call refactor_vocab() first.")
+            out = self.vocab["label_map"][out]
+
+        return out
 
     def refactor_vocab(
         self,
@@ -582,6 +700,42 @@ class EphysTokenizerModule(pl.LightningModule):
             remapped_tokens.append(remapped_t)
 
         return self._reconstruct_data(remapped_tokens, concatenate, device)
+
+    def reconstruct_session(
+        self,
+        tokens: np.ndarray,
+        device: Optional[torch.device] = None,
+    ) -> np.ndarray:
+        """
+        Reconstruct a continuous recording from a token stream.
+
+        Inverse of :meth:`tokenize_session`. The decoder consumes whole length-``L``
+        windows, so the token stream is cropped to a multiple of ``L`` (dropping at
+        most ``L - 1`` trailing samples) before being passed to
+        :meth:`reconstruct_data`.
+
+        Parameters
+        ----------
+        tokens : np.ndarray
+            Token stream for one recording, shape (n_samples, n_channels), holding
+            refactored vocabulary labels (as returned by :meth:`tokenize_session`).
+        device : torch.device, optional
+            Device to reconstruct on.
+
+        Returns
+        -------
+        reconstructed : np.ndarray
+            Reconstructed signal, shape (n_cropped, n_channels), where
+            ``n_cropped = (n_samples // L) * L``.
+        """
+        tokens = np.asarray(tokens).astype(np.int64)
+        L = self.config.sequence_length
+        T = (tokens.shape[0] // L) * L
+        if T == 0:
+            raise ValueError(
+                f"Token stream too short: {tokens.shape[0]} < sequence_length {L}."
+            )
+        return self.reconstruct_data(tokens[:T], concatenate=True, device=device)
 
     # -----------------
     # Post hoc analysis
