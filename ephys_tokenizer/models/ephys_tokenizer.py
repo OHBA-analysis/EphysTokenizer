@@ -484,6 +484,49 @@ class EphysTokenizerModule(pl.LightningModule):
 
         return out
 
+    def _count_tokens(self, dataloader: DataLoader, batch_size: int) -> np.ndarray:
+        """
+        Counts the (unmapped) tokens of each subject, batch by batch.
+
+        Gives the same counts as bincounting the output of
+        ``tokenize_data(remap=False)`` per subject, but holds only the counts:
+        no array of every token, and no DataLoader workers (each of which
+        would cache its own copy of the data).
+
+        Returns
+        -------
+        token_counts : np.ndarray
+            Shape (n_subjects, n_tokens), int32.
+        """
+        dataset = unwrap_dataset(dataloader)
+        if not isinstance(dataset, ConcatDataset):
+            raise RuntimeError("Incorrect dataset type.")
+        ends = np.cumsum([len(ds) for ds in dataset.datasets])
+        n_subjects, n_tokens = len(ends), self.config.n_tokens
+
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=getattr(dataloader, "collate_fn", None),
+        )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = self.model.to(device).eval()
+        counts = torch.zeros(n_subjects * n_tokens, dtype=torch.int64, device=device)
+        start = 0
+        with torch.inference_mode():
+            for batch in tqdm(loader, desc="Counting tokens ...", total=len(loader)):
+                _, _, tw = model(batch["data"].to(device))
+                tokens = tw.argmax(dim=-1)  # shape: (B, L, C)
+                n = tokens.shape[0]
+                subject = np.searchsorted(ends, np.arange(start, start + n), side="right")
+                subject = torch.as_tensor(subject, device=device)
+                flat = (subject[:, None, None] * n_tokens + tokens).flatten()
+                counts += torch.bincount(flat, minlength=n_subjects * n_tokens)
+                start += n
+        return counts.view(n_subjects, n_tokens).cpu().numpy().astype(np.int32)
+
     def refactor_vocab(
         self,
         dataloader: DataLoader,
@@ -513,24 +556,8 @@ class EphysTokenizerModule(pl.LightningModule):
         n_tokens = self.config.n_tokens
         batch_size = batch_size or self.config.training.batch_size
 
-        # Tokenize data by subject
-        tokens = self.tokenize_data(
-            dataloader,
-            batch_size=batch_size,
-            remap=False,
-            concatenate=False,
-            return_weights=False,
-            device=None,
-        )  # shape: (N, T, C)
-
         # Count tokens across samples and channels for each subject
-        token_counts = np.array(
-            [
-                np.bincount(t.flatten().astype(np.int64), minlength=n_tokens)
-                for t in tokens
-            ],
-            dtype=np.int32,
-        )
+        token_counts = self._count_tokens(dataloader, batch_size)
 
         # Get token order based on token counts
         if sort:
