@@ -14,8 +14,19 @@ license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
   "torch",
+  "pytorch-lightning",
+  "tensorboard",
   "numpy",
+  "scipy",
+  "matplotlib",
+  "pandas",
   "scikit-learn",
+  "h5py",
+  "mne",
+  "pqdm",
+  "tqdm",
+  "hydra-core",
+  "einops",
 ]
 classifiers = [
   "Programming Language :: Python :: 3",

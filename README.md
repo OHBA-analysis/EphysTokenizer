@@ -21,14 +21,9 @@ In addition, this repository also provides baseline tokenization methods based o
 
 ## 🎯 Requirements
 
-This project has the following dependencies:
+This project requires Python 3.10 and PyTorch (with CUDA on Linux). Training uses PyTorch Lightning.
 
-* python=3.10
-* pytorch=2.5.1
-* pytorch-cuda=12.1
-* pytorch-lightning=2.6.1
-
-For a full list of required packages, please refer to `envs/etkn.yml`.
+Platform-specific conda environments (Python and PyTorch builds) are in `envs/`. The remaining Python dependencies are listed in `pyproject.toml`.
 
 ## 📌 Installation
 
@@ -39,12 +34,21 @@ To install `EphysTokenizer`, you can follow the steps below:
    git clone git@github.com:OHBA-analysis/EphysTokenizer.git
    cd EphysTokenizer
    ```
-2. Create and activate a virtual environment.
+2. Create and activate a conda environment for your platform.
    ```bash
-   mamba env create -f envs/etkn.yml
+   mamba env create -f envs/<platform>.yml
    conda activate etkn
    ```
-3. Install required packages.
+   Find your platform with `conda info | grep platform`. Supported platforms:
+
+   | Platform | Machine |
+   |---|---|
+   | `linux-64` | Linux x86_64 with an NVIDIA GPU |
+   | `linux-aarch64` | Linux ARM with an NVIDIA GPU (e.g. Grace Hopper GH200) |
+   | `osx-arm64` | Apple Silicon Mac (CPU/MPS) |
+
+   The Linux environments use PyTorch's CUDA 12.8 builds, which need an NVIDIA driver that supports CUDA 12.8 or newer.
+3. Install `EphysTokenizer` and its remaining dependencies.
    ```bash
    pip install -e .
    ```
@@ -93,7 +97,7 @@ recon  = model.reconstruct_session(tokens)         # -> reconstructed signal
 ```
 EphysTokenizer-main/
 ├── envs/
-│   └── etkn.yml                  # Conda environment specification (dependencies for training and experiments)
+│   └── <platform>.yml            # Conda environment for each platform (linux-64, linux-aarch64, osx-arm64)
 │
 ├── ephys_tokenizer/
 │   ├── configs/

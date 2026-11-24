@@ -1,0 +1,19 @@
+# Linux x86_64 with an NVIDIA GPU (needs a driver supporting CUDA >= 12.8).
+name: etkn
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - scipy
+  - matplotlib
+  - pandas
+  - scikit-learn
+  - h5py
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.11.0+cu128
+      - torchvision==0.26.0+cu128
+      - torchaudio==2.11.0+cu128
